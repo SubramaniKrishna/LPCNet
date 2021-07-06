@@ -28,7 +28,7 @@
 import math
 import tensorflow as tf
 from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Input, GRU, Dense, Embedding, Reshape, Concatenate, Lambda, Conv1D, Multiply, Add, Bidirectional, MaxPooling1D, Activation
+from tensorflow.keras.layers import Input, GRU, Dense, Embedding, Reshape, Concatenate, Lambda, Conv1D, Multiply, Add, Bidirectional, MaxPooling1D, Activation, Layer
 from tensorflow.compat.v1.keras.layers import CuDNNGRU
 from tensorflow.keras import backend as K
 from tensorflow.keras.constraints import Constraint
@@ -151,13 +151,24 @@ def new_lpcnet_model(rnn_units1=384, rnn_units2=16, nb_used_features = 38, train
     dec_feat = Input(shape=(None, 128))
     dec_state1 = Input(shape=(rnn_units1,))
     dec_state2 = Input(shape=(rnn_units2,))
+    Input_extractor = Lambda(lambda x: K.expand_dims(x[0][:,:,x[1]],axis = -1))
+    lpcoeffs = Input(shape = (None,16))
+    iT = Lambda(lambda x: (x - 128.0)/100.0)
 
     padding = 'valid' if training else 'same'
     fconv1 = Conv1D(128, 3, padding=padding, activation='tanh', name='feature_conv1')
     fconv2 = Conv1D(128, 3, padding=padding, activation='tanh', name='feature_conv2')
 
-    embed = Embedding(256, embed_size, embeddings_initializer=PCMInit(), name='embed_sig')
-    cpcm = Reshape((-1, embed_size*3))(embed(pcm))
+    # embed = Embedding(256, embed_size, embeddings_initializer=PCMInit(), name='embed_sig')
+    embed = diff_Embed(name='embed_sig')
+    # print(pcm.shape,embed(pcm).shape)
+    tensor_preds = diff_pred(name = 'diffpred')([Input_extractor([pcm,0]),lpcoeffs])
+    cpcm = Concatenate()([Input_extractor([pcm,0]),tensor_preds,Input_extractor([pcm,2])])
+    cpcm = Reshape((-1, embed_size*3))(embed(cpcm))
+    cpcm_decoder = Concatenate()([Input_extractor([pcm,0]),Input_extractor([pcm,1]),Input_extractor([pcm,2])])
+    cpcm_decoder = Reshape((-1, embed_size*3))(embed(cpcm_decoder))
+    # cpcm = Concatenate()([iT(Input_extractor([pcm,0])),iT(tensor_preds),iT(Input_extractor([pcm,2]))])
+    # cpcm_decoder = Concatenate()([iT(Input_extractor([pcm,0])),iT(Input_extractor([pcm,1])),iT(Input_extractor([pcm,2]))])
 
     pembed = Embedding(256, 64, name='embed_pitch')
     cat_feat = Concatenate()([feat, Reshape((-1, 64))(pembed(pitch))])
@@ -196,7 +207,8 @@ def new_lpcnet_model(rnn_units1=384, rnn_units2=16, nb_used_features = 38, train
         md.trainable=False
         embed.Trainable=False
     
-    model = Model([pcm, feat, pitch], ulaw_prob)
+    m_out = Concatenate()([tensor_preds,ulaw_prob])
+    model = Model([pcm, feat,lpcoeffs, pitch], m_out)
     model.rnn_units1 = rnn_units1
     model.rnn_units2 = rnn_units2
     model.nb_used_features = nb_used_features
@@ -204,10 +216,79 @@ def new_lpcnet_model(rnn_units1=384, rnn_units2=16, nb_used_features = 38, train
 
     encoder = Model([feat, pitch], cfeat)
     
-    dec_rnn_in = Concatenate()([cpcm, dec_feat])
+    dec_rnn_in = Concatenate()([cpcm_decoder, dec_feat])
     dec_gru_out1, state1 = rnn(dec_rnn_in, initial_state=dec_state1)
     dec_gru_out2, state2 = rnn2(Concatenate()([dec_gru_out1, dec_feat]), initial_state=dec_state2)
     dec_ulaw_prob = md(dec_gru_out2)
 
     decoder = Model([pcm, dec_feat, dec_state1, dec_state2], [dec_ulaw_prob, state1, state2])
     return model, encoder, decoder
+
+scale = 255.0/32768.0
+scale_1 = 32768.0/255.0
+def tf_l2u(x):
+    s = K.sign(x)
+    x = K.abs(x)
+    u = (s*(128*K.log(1+scale*x)/K.log(256.0)))
+    u = K.clip(128 + u, 0, 255)
+    return u
+
+def tf_u2l(u):
+    u = u - 128.0
+    s = K.sign(u)
+    u = K.abs(u)
+    return s*scale_1*(K.exp(u/128.*K.log(256.0))-1)
+
+class diff_pred(Layer):
+    def call(self, inputs):
+        xt = tf_u2l(inputs[0])
+        lpc = inputs[1]
+
+        rept = Lambda(lambda x: K.repeat_elements(x , frame_size, 1))
+        zpX = Lambda(lambda x: K.concatenate([0*x[:,0:16,:], x],axis = 1))
+        cX = Lambda(lambda x: K.concatenate([x[:,(16 - i):(16 - i + 2400),:] for i in range(16)],axis = 2))
+
+        pred = -Multiply()([rept(lpc),cX(zpX(xt))])
+
+        return tf_l2u(K.sum(pred,axis = 2,keepdims = True))
+
+class diff_Embed(Layer):
+
+    def __init__(self, units=128, dict_size = 256, **kwargs):
+        super(diff_Embed, self).__init__(**kwargs)
+        self.units = units
+        self.dict_size = dict_size
+
+    def build(self, input_shape):  # Create the state of the layer (weights)
+        w_init = tf.random_normal_initializer()
+        self.w = tf.Variable(initial_value=w_init(shape=(self.dict_size, self.units),dtype='float32'),trainable=True)
+
+    def call(self, inputs):  # Defines the computation from inputs to outputs
+        alpha = inputs - tf.math.floor(inputs)
+        alpha = tf.expand_dims(alpha,axis = -1)
+        alpha = tf.tile(alpha,[1,1,1,self.units])
+        inputs = tf.cast(inputs,'uint8')
+        ip_E = tf.one_hot(inputs, self.dict_size)
+        ip_Ep1 = tf.one_hot(inputs + 1, self.dict_size)
+        ip_EP1 = tf.clip_by_value(ip_Ep1, 0, 255)
+        M = (1 - alpha)*tf.matmul(ip_E, self.w) + alpha*(tf.matmul(ip_EP1, self.w))
+
+        #   print(ip_E[0,:,0,0])
+        #   print(ip_E.shape,self.w.shape)
+        # print(tf.matmul(ip_E, self.w).shape)
+        return M
+
+    def get_config(self):
+        config = super(diff_Embed, self).get_config()
+        config.update({"units": self.units})
+        config.update({"dict_size" : self.dict_size})
+        return config
+
+# class diff_Embed(Layer):
+#     def call(self,inputs):
+#         # inputs = tf.cast(inputs,'uint8')
+#         ip_E = tf.one_hot(inputs, self.dict_size)
+#         # eM = Dense(embed_dim,activation='linear')
+#         eM = Embedding(256, 128)
+#         return eM(inputs)
+

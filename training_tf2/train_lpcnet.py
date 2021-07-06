@@ -44,10 +44,45 @@ import tensorflow as tf
 #  except RuntimeError as e:
 #    print(e)
 
+scale = 255.0/32768.0
+scale_1 = 32768.0/255.0
+def tf_l2u(x):
+    s = K.sign(x)
+    x = K.abs(x)
+    u = (s*(128*K.log(1+scale*x)/K.log(256.0)))
+    u = K.clip(128 + u, 0, 255)
+    return u
+
+def tf_u2l(u):
+    u = tf.cast(u,"float32")
+    u = u - 128.0
+    s = K.sign(u)
+    u = K.abs(u)
+    return s*scale_1*(K.exp(u/128.*K.log(256.0))-1)
+
+def res_from_sigloss():
+    def loss(y_true,y_pred):
+        p = y_pred[:,:,0:1]
+        model_out = y_pred[:,:,1:]
+        e_gt = tf_l2u(tf_u2l(y_true) - tf_u2l(p))
+        e_gt = tf.cast(e_gt,'uint8')
+        sparse_cel = tf.keras.losses.SparseCategoricalCrossentropy(reduction=tf.keras.losses.Reduction.NONE)(e_gt,model_out)
+        return sparse_cel
+    return loss
+
+def interp_mulaw():
+    def loss(y_true,y_pred):
+        p = y_pred[:,:,0:1]
+        model_out = y_pred[:,:,1:]
+        e_gt = tf_l2u(tf_u2l(y_true) - tf_u2l(p))
+        e_gt = tf.cast(e_gt,'uint8')
+        sparse_cel = tf.keras.losses.SparseCategoricalCrossentropy(reduction=tf.keras.losses.Reduction.NONE)(e_gt,model_out)
+        return sparse_cel
+    return loss
 nb_epochs = 120
 
 # Try reducing batch_size if you run out of memory on your GPU
-batch_size = 128
+batch_size = 64
 
 #Set this to True to adapt an existing model (e.g. on new data)
 adaptation = False
@@ -64,7 +99,8 @@ strategy = tf.distribute.experimental.MultiWorkerMirroredStrategy()
 
 with strategy.scope():
     model, _, _ = lpcnet.new_lpcnet_model(training=True)
-    model.compile(optimizer=opt, loss='sparse_categorical_crossentropy', metrics=['sparse_categorical_accuracy'])
+    # model.compile(optimizer=opt, loss='sparse_categorical_crossentropy', metrics=['sparse_categorical_accuracy'])
+    model.compile(optimizer=opt, loss=res_from_sigloss())
     model.summary()
 
 feature_file = sys.argv[1]
@@ -97,6 +133,7 @@ del data
 print("ulaw std = ", np.std(out_exc))
 
 features = np.reshape(features, (nb_frames, feature_chunk_size, nb_features))
+lpcoeffs = features[:, :, nb_used_features+1:]
 features = features[:, :, :nb_used_features]
 features[:,:,18:36] = 0
 
@@ -115,7 +152,8 @@ del pred
 del in_exc
 
 # dump models to disk as we go
-checkpoint = ModelCheckpoint('lpcnet33e_384_{epoch:02d}.h5')
+dir_w = './model_weights/diffembed/'
+checkpoint = ModelCheckpoint(dir_w + 'lpcnet33e_384_{epoch:02d}.h5')
 
 if adaptation:
     #Adapting from an existing model
@@ -125,5 +163,5 @@ else:
     #Training from scratch
     sparsify = lpcnet.Sparsify(2000, 40000, 400, (0.05, 0.05, 0.2))
 
-model.save_weights('lpcnet33e_384_00.h5');
-model.fit([in_data, features, periods], out_exc, batch_size=batch_size, epochs=nb_epochs, validation_split=0.0, callbacks=[checkpoint, sparsify])
+model.save_weights(dir_w + 'lpcnet33e_384_00.h5');
+model.fit([in_data, features,lpcoeffs, periods], out_exc, batch_size=batch_size, epochs=nb_epochs, validation_split=0.0, callbacks=[checkpoint, sparsify])
