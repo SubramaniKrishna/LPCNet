@@ -1,0 +1,122 @@
+diff --git a/.gitignore b/.gitignore
+index 3eb50e8..1017e44 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -1,3 +1,5 @@
+ *.s16
+ *.u8
+-*.pcm
+\ No newline at end of file
++*.pcm
++*.m4
++*.h5
+\ No newline at end of file
+diff --git a/src/dump_data.c b/src/dump_data.c
+index 05dd5ce..3d9cb75 100644
+--- a/src/dump_data.c
++++ b/src/dump_data.c
+@@ -92,8 +92,8 @@ void write_audio(LPCNetEncState *st, const short *pcm, const int *noise, FILE *f
+     /* Excitation in. */
+     data[4*i+2] = st->exc_mem;
+     /* Excitation out. */
+-    // data[4*i+3] = e;
+-    data[4*i+3] = lin2ulaw(pcm[k*FRAME_SIZE+i]);
++    data[4*i+3] = e;
++    // data[4*i+3] = lin2ulaw(pcm[k*FRAME_SIZE+i]);
+     /* Simulate error on excitation. */
+     e += noise[k*FRAME_SIZE+i];
+     e = IMIN(255, IMAX(0, e));
+diff --git a/training_tf2/lpcnet.py b/training_tf2/lpcnet.py
+index 425ac15..ec9f667 100644
+--- a/training_tf2/lpcnet.py
++++ b/training_tf2/lpcnet.py
+@@ -207,8 +207,8 @@ def new_lpcnet_model(rnn_units1=384, rnn_units2=16, nb_used_features = 38, train
+         md.trainable=False
+         embed.Trainable=False
+     
+-    m_out = Concatenate()([tensor_preds,ulaw_prob])
+-    model = Model([pcm, feat,lpcoeffs, pitch], m_out)
++    # m_out = Concatenate()([tensor_preds,ulaw_prob])
++    model = Model([pcm, feat,lpcoeffs, pitch], ulaw_prob)
+     model.rnn_units1 = rnn_units1
+     model.rnn_units2 = rnn_units2
+     model.nb_used_features = nb_used_features
+@@ -267,12 +267,11 @@ class diff_Embed(Layer):
+         alpha = inputs - tf.math.floor(inputs)
+         alpha = tf.expand_dims(alpha,axis = -1)
+         alpha = tf.tile(alpha,[1,1,1,self.units])
+-        inputs = tf.cast(inputs,'uint8')
++        inputs = tf.cast(inputs,'int32')
+         ip_E = tf.one_hot(inputs, self.dict_size)
+-        ip_Ep1 = tf.one_hot(inputs + 1, self.dict_size)
+-        ip_EP1 = tf.clip_by_value(ip_Ep1, 0, 255)
+-        M = (1 - alpha)*tf.matmul(ip_E, self.w) + alpha*(tf.matmul(ip_EP1, self.w))
+-
++        # ip_Ep1 = tf.one_hot(tf.clip_by_value(inputs + 1, 0, 255), self.dict_size)
++        # M = (1 - alpha)*tf.matmul(ip_E, self.w) + alpha*(tf.matmul(ip_Ep1, self.w))
++        M = (1 - alpha)*tf.gather(self.w,inputs) + alpha*tf.gather(self.w,tf.clip_by_value(inputs + 1, 0, 255))
+         #   print(ip_E[0,:,0,0])
+         #   print(ip_E.shape,self.w.shape)
+         # print(tf.matmul(ip_E, self.w).shape)
+diff --git a/training_tf2/train_lpcnet.py b/training_tf2/train_lpcnet.py
+index ef31ea9..58f512f 100755
+--- a/training_tf2/train_lpcnet.py
++++ b/training_tf2/train_lpcnet.py
+@@ -31,7 +31,7 @@ import lpcnet
+ import sys
+ import numpy as np
+ from tensorflow.keras.optimizers import Adam
+-from tensorflow.keras.callbacks import ModelCheckpoint
++from tensorflow.keras.callbacks import ModelCheckpoint, CSVLogger
+ from ulaw import ulaw2lin, lin2ulaw
+ import tensorflow.keras.backend as K
+ import h5py
+@@ -44,6 +44,12 @@ import tensorflow as tf
+ #  except RuntimeError as e:
+ #    print(e)
+ 
++import wandb
++from wandb.keras import WandbCallback
++
++wandb.init(project='difflpcnet', entity='krishnasubramani', notes="Embedding Interpolate")
++config = wandb.config
++
+ scale = 255.0/32768.0
+ scale_1 = 32768.0/255.0
+ def tf_l2u(x):
+@@ -79,10 +85,10 @@ def interp_mulaw():
+         sparse_cel = tf.keras.losses.SparseCategoricalCrossentropy(reduction=tf.keras.losses.Reduction.NONE)(e_gt,model_out)
+         return sparse_cel
+     return loss
+-nb_epochs = 120
++nb_epochs = 60
+ 
+ # Try reducing batch_size if you run out of memory on your GPU
+-batch_size = 64
++batch_size = 128
+ 
+ #Set this to True to adapt an existing model (e.g. on new data)
+ adaptation = False
+@@ -99,8 +105,8 @@ strategy = tf.distribute.experimental.MultiWorkerMirroredStrategy()
+ 
+ with strategy.scope():
+     model, _, _ = lpcnet.new_lpcnet_model(training=True)
+-    # model.compile(optimizer=opt, loss='sparse_categorical_crossentropy', metrics=['sparse_categorical_accuracy'])
+-    model.compile(optimizer=opt, loss=res_from_sigloss())
++    model.compile(optimizer=opt, loss='sparse_categorical_crossentropy', metrics=['sparse_categorical_accuracy'])
++    # model.compile(optimizer=opt, loss=res_from_sigloss())
+     model.summary()
+ 
+ feature_file = sys.argv[1]
+@@ -164,4 +170,10 @@ else:
+     sparsify = lpcnet.Sparsify(2000, 40000, 400, (0.05, 0.05, 0.2))
+ 
+ model.save_weights(dir_w + 'lpcnet33e_384_00.h5');
+-model.fit([in_data, features,lpcoeffs, periods], out_exc, batch_size=batch_size, epochs=nb_epochs, validation_split=0.0, callbacks=[checkpoint, sparsify])
++config.loss = "Embedding Interpolate"
++config.batch_size = batch_size
++config.nb_epochs = nb_epochs
++config.lr = lr
++config.decay = decay
++csv_logger = CSVLogger('diffembed.log')
++model.fit([in_data, features, lpcoeffs, periods], out_exc, batch_size=batch_size, epochs=nb_epochs, validation_split=0.0, callbacks=[checkpoint, sparsify, csv_logger])

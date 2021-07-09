@@ -1,0 +1,468 @@
+WARNING:tensorflow:From /home/ubuntu/git/LPCNet/./training_tf2/train_lpcnet.py:104: _CollectiveAllReduceStrategyExperimental.__init__ (from tensorflow.python.distribute.collective_all_reduce_strategy) is deprecated and will be removed in a future version.
+Instructions for updating:
+use distribute.MultiWorkerMirroredStrategy instead
+Model: "model"
+__________________________________________________________________________________________________
+Layer (type)                    Output Shape         Param #     Connected to
+==================================================================================================
+input_3 (InputLayer)            [(None, None, 1)]    0
+__________________________________________________________________________________________________
+embed_pitch (Embedding)         (None, None, 1, 64)  16384       input_3[0][0]
+__________________________________________________________________________________________________
+input_2 (InputLayer)            [(None, None, 38)]   0
+__________________________________________________________________________________________________
+reshape_2 (Reshape)             (None, None, 64)     0           embed_pitch[0][0]
+__________________________________________________________________________________________________
+concatenate (Concatenate)       (None, None, 102)    0           input_2[0][0]
+                                                                 reshape_2[0][0]
+__________________________________________________________________________________________________
+feature_conv1 (Conv1D)          (None, None, 128)    39296       concatenate[0][0]
+__________________________________________________________________________________________________
+feature_conv2 (Conv1D)          (None, None, 128)    49280       feature_conv1[0][0]
+__________________________________________________________________________________________________
+input_1 (InputLayer)            [(None, None, 3)]    0
+__________________________________________________________________________________________________
+feature_dense1 (Dense)          (None, None, 128)    16512       feature_conv2[0][0]
+__________________________________________________________________________________________________
+embed_sig (Embedding)           (None, None, 3, 128) 32768       input_1[0][0]
+__________________________________________________________________________________________________
+feature_dense2 (Dense)          (None, None, 128)    16512       feature_dense1[0][0]
+__________________________________________________________________________________________________
+reshape (Reshape)               (None, None, 384)    0           embed_sig[0][0]
+__________________________________________________________________________________________________
+lambda_2 (Lambda)               (None, None, 128)    0           feature_dense2[0][0]
+                                                                 feature_dense2[0][0]
+__________________________________________________________________________________________________
+concatenate_1 (Concatenate)     (None, None, 512)    0           reshape[0][0]
+                                                                 lambda_2[0][0]
+__________________________________________________________________________________________________
+gru_a (CuDNNGRU)                [(None, None, 384),  1034496     concatenate_1[0][0]
+__________________________________________________________________________________________________
+concatenate_2 (Concatenate)     (None, None, 512)    0           gru_a[0][0]
+                                                                 lambda_2[1][0]
+__________________________________________________________________________________________________
+gru_b (CuDNNGRU)                [(None, None, 16), ( 25440       concatenate_2[0][0]
+__________________________________________________________________________________________________
+input_7 (InputLayer)            [(None, None, 16)]   0
+__________________________________________________________________________________________________
+dual_fc (MDense)                (None, None, 256)    9216        gru_b[0][0]
+==================================================================================================
+Total params: 1,239,904
+Trainable params: 1,239,904
+Non-trainable params: 0
+__________________________________________________________________________________________________
+ulaw std =  27.87997231174097
+Epoch 1/120
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+2604/2604 [==============================] - 776s 279ms/step - loss: 2.9489 - sparse_categorical_accuracy: 0.3051
+Epoch 2/120
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 194/2604 [=>............................] - ETA: 11:12 - loss: 2.0536 - sparse_categorical_accuracy: 0.3631
+Traceback (most recent call last):
+  File "/home/ubuntu/git/LPCNet/./training_tf2/train_lpcnet.py", line 178, in <module>
+    model.fit([in_data, features,lpcoeffs, periods], out_exc, batch_size=batch_size, epochs=nb_epochs, validation_split=0.0, callbacks=[checkpoint, sparsify, WandbCallback()])
+  File "/home/ubuntu/anaconda3/envs/tensorflow_p36/lib/python3.9/site-packages/wandb/integration/keras/keras.py", line 124, in new_v2
+    return old_v2(*args, **kwargs)
+  File "/home/ubuntu/anaconda3/envs/tensorflow_p36/lib/python3.9/site-packages/tensorflow/python/keras/engine/training.py", line 1100, in fit
+    tmp_logs = self.train_function(iterator)
+  File "/home/ubuntu/anaconda3/envs/tensorflow_p36/lib/python3.9/site-packages/tensorflow/python/eager/def_function.py", line 828, in __call__
+    result = self._call(*args, **kwds)
+  File "/home/ubuntu/anaconda3/envs/tensorflow_p36/lib/python3.9/site-packages/tensorflow/python/eager/def_function.py", line 855, in _call
+    return self._stateless_fn(*args, **kwds)  # pylint: disable=not-callable
+  File "/home/ubuntu/anaconda3/envs/tensorflow_p36/lib/python3.9/site-packages/tensorflow/python/eager/function.py", line 2942, in __call__
+    return graph_function._call_flat(
+  File "/home/ubuntu/anaconda3/envs/tensorflow_p36/lib/python3.9/site-packages/tensorflow/python/eager/function.py", line 1918, in _call_flat
+    return self._build_call_outputs(self._inference_function.call(
+  File "/home/ubuntu/anaconda3/envs/tensorflow_p36/lib/python3.9/site-packages/tensorflow/python/eager/function.py", line 555, in call
+    outputs = execute.execute(
+  File "/home/ubuntu/anaconda3/envs/tensorflow_p36/lib/python3.9/site-packages/tensorflow/python/eager/execute.py", line 59, in quick_execute
+    tensors = pywrap_tfe.TFE_Py_Execute(ctx._handle, device_name, op_name,
+
+ 197/2604 [=>............................] - ETA: 11:11 - loss: 2.0535 - sparse_categorical_accuracy: 0.3631

@@ -1,0 +1,98 @@
+diff --git a/.gitignore b/.gitignore
+index 3eb50e8..1017e44 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -1,3 +1,5 @@
+ *.s16
+ *.u8
+-*.pcm
+\ No newline at end of file
++*.pcm
++*.m4
++*.h5
+\ No newline at end of file
+diff --git a/training_tf2/lpcnet.py b/training_tf2/lpcnet.py
+index 425ac15..1c669de 100644
+--- a/training_tf2/lpcnet.py
++++ b/training_tf2/lpcnet.py
+@@ -159,14 +159,14 @@ def new_lpcnet_model(rnn_units1=384, rnn_units2=16, nb_used_features = 38, train
+     fconv1 = Conv1D(128, 3, padding=padding, activation='tanh', name='feature_conv1')
+     fconv2 = Conv1D(128, 3, padding=padding, activation='tanh', name='feature_conv2')
+ 
+-    # embed = Embedding(256, embed_size, embeddings_initializer=PCMInit(), name='embed_sig')
+-    embed = diff_Embed(name='embed_sig')
++    embed = Embedding(256, embed_size, embeddings_initializer=PCMInit(), name='embed_sig')
++    # embed = diff_Embed(name='embed_sig')
+     # print(pcm.shape,embed(pcm).shape)
+-    tensor_preds = diff_pred(name = 'diffpred')([Input_extractor([pcm,0]),lpcoeffs])
+-    cpcm = Concatenate()([Input_extractor([pcm,0]),tensor_preds,Input_extractor([pcm,2])])
+-    cpcm = Reshape((-1, embed_size*3))(embed(cpcm))
+-    cpcm_decoder = Concatenate()([Input_extractor([pcm,0]),Input_extractor([pcm,1]),Input_extractor([pcm,2])])
+-    cpcm_decoder = Reshape((-1, embed_size*3))(embed(cpcm_decoder))
++    # tensor_preds = diff_pred(name = 'diffpred')([Input_extractor([pcm,0]),lpcoeffs])
++    # cpcm = Concatenate()([Input_extractor([pcm,0]),Input_extractor([pcm,1]),Input_extractor([pcm,2])])
++    cpcm = Reshape((-1, embed_size*3))(embed(pcm))
++    # cpcm_decoder = Concatenate()([Input_extractor([pcm,0]),Input_extractor([pcm,1]),Input_extractor([pcm,2])])
++    cpcm_decoder = Reshape((-1, embed_size*3))(embed(pcm))
+     # cpcm = Concatenate()([iT(Input_extractor([pcm,0])),iT(tensor_preds),iT(Input_extractor([pcm,2]))])
+     # cpcm_decoder = Concatenate()([iT(Input_extractor([pcm,0])),iT(Input_extractor([pcm,1])),iT(Input_extractor([pcm,2]))])
+ 
+@@ -207,8 +207,8 @@ def new_lpcnet_model(rnn_units1=384, rnn_units2=16, nb_used_features = 38, train
+         md.trainable=False
+         embed.Trainable=False
+     
+-    m_out = Concatenate()([tensor_preds,ulaw_prob])
+-    model = Model([pcm, feat,lpcoeffs, pitch], m_out)
++    # m_out = Concatenate()([tensor_preds,ulaw_prob])
++    model = Model([pcm, feat,lpcoeffs, pitch], ulaw_prob)
+     model.rnn_units1 = rnn_units1
+     model.rnn_units2 = rnn_units2
+     model.nb_used_features = nb_used_features
+diff --git a/training_tf2/train_lpcnet.py b/training_tf2/train_lpcnet.py
+index ef31ea9..327f155 100755
+--- a/training_tf2/train_lpcnet.py
++++ b/training_tf2/train_lpcnet.py
+@@ -44,6 +44,12 @@ import tensorflow as tf
+ #  except RuntimeError as e:
+ #    print(e)
+ 
++import wandb
++from wandb.keras import WandbCallback
++
++wandb.init(project='difflpcnet', entity='krishnasubramani')
++config = wandb.config
++
+ scale = 255.0/32768.0
+ scale_1 = 32768.0/255.0
+ def tf_l2u(x):
+@@ -82,7 +88,7 @@ def interp_mulaw():
+ nb_epochs = 120
+ 
+ # Try reducing batch_size if you run out of memory on your GPU
+-batch_size = 64
++batch_size = 128
+ 
+ #Set this to True to adapt an existing model (e.g. on new data)
+ adaptation = False
+@@ -99,8 +105,8 @@ strategy = tf.distribute.experimental.MultiWorkerMirroredStrategy()
+ 
+ with strategy.scope():
+     model, _, _ = lpcnet.new_lpcnet_model(training=True)
+-    # model.compile(optimizer=opt, loss='sparse_categorical_crossentropy', metrics=['sparse_categorical_accuracy'])
+-    model.compile(optimizer=opt, loss=res_from_sigloss())
++    model.compile(optimizer=opt, loss='sparse_categorical_crossentropy', metrics=['sparse_categorical_accuracy'])
++    # model.compile(optimizer=opt, loss=res_from_sigloss())
+     model.summary()
+ 
+ feature_file = sys.argv[1]
+@@ -164,4 +170,9 @@ else:
+     sparsify = lpcnet.Sparsify(2000, 40000, 400, (0.05, 0.05, 0.2))
+ 
+ model.save_weights(dir_w + 'lpcnet33e_384_00.h5');
+-model.fit([in_data, features,lpcoeffs, periods], out_exc, batch_size=batch_size, epochs=nb_epochs, validation_split=0.0, callbacks=[checkpoint, sparsify])
++config.loss = "Baseline Model"
++config.batch_size = batch_size
++config.nb_epochs = nb_epochs
++config.lr = lr
++config.decay = decay
++model.fit([in_data, features,lpcoeffs, periods], out_exc, batch_size=batch_size, epochs=nb_epochs, validation_split=0.0, callbacks=[checkpoint, sparsify, WandbCallback()])

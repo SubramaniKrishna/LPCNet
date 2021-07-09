@@ -1,0 +1,38 @@
+wandb_version: 1
+
+_wandb:
+  desc: null
+  value:
+    cli_version: 0.10.33
+    code_path: code/training_tf2/train_lpcnet.py
+    framework: tensorflow
+    is_jupyter_run: false
+    is_kaggle_kernel: false
+    python_version: 3.9.5
+    t:
+      1:
+      - 3
+      2:
+      - 3
+      3:
+      - 3
+      - 8
+      4: 3.9.5
+      5: 0.10.33
+      8:
+      - 5
+batch_size:
+  desc: null
+  value: 128
+decay:
+  desc: null
+  value: 2.5e-05
+loss:
+  desc: null
+  value: Baseline Model
+lr:
+  desc: null
+  value: 0.001
+nb_epochs:
+  desc: null
+  value: 120

@@ -1,0 +1,40 @@
+WARNING:tensorflow:From /home/ubuntu/git/LPCNet/./training_tf2/train_lpcnet.py:104: _CollectiveAllReduceStrategyExperimental.__init__ (from tensorflow.python.distribute.collective_all_reduce_strategy) is deprecated and will be removed in a future version.
+Instructions for updating:
+use distribute.MultiWorkerMirroredStrategy instead
+WARNING:tensorflow:AutoGraph could not transform <bound method diff_pred.call of <lpcnet.diff_pred object at 0x7f1a4c09cca0>> and will run it as-is.
+Please report this to the TensorFlow team. When filing the bug, set the verbosity to 10 (on Linux, `export AUTOGRAPH_VERBOSITY=10`) and attach the full output.
+Cause: module 'gast' has no attribute 'Index'
+To silence this warning, decorate the function with @tf.autograph.experimental.do_not_convert
+Traceback (most recent call last):
+  File "/home/ubuntu/git/LPCNet/./training_tf2/train_lpcnet.py", line 107, in <module>
+    model, _, _ = lpcnet.new_lpcnet_model(training=True)
+  File "/home/ubuntu/git/LPCNet/training_tf2/lpcnet.py", line 167, in new_lpcnet_model
+    cpcm = Reshape((-1, embed_size*3))(embed(cpcm))
+  File "/home/ubuntu/anaconda3/envs/tensorflow_p36/lib/python3.9/site-packages/tensorflow/python/keras/engine/base_layer.py", line 951, in __call__
+    return self._functional_construction_call(inputs, args, kwargs,
+  File "/home/ubuntu/anaconda3/envs/tensorflow_p36/lib/python3.9/site-packages/tensorflow/python/keras/engine/base_layer.py", line 1090, in _functional_construction_call
+    outputs = self._keras_tensor_symbolic_call(
+  File "/home/ubuntu/anaconda3/envs/tensorflow_p36/lib/python3.9/site-packages/tensorflow/python/keras/engine/base_layer.py", line 822, in _keras_tensor_symbolic_call
+    return self._infer_output_signature(inputs, args, kwargs, input_masks)
+  File "/home/ubuntu/anaconda3/envs/tensorflow_p36/lib/python3.9/site-packages/tensorflow/python/keras/engine/base_layer.py", line 863, in _infer_output_signature
+    outputs = call_fn(inputs, *args, **kwargs)
+  File "/home/ubuntu/anaconda3/envs/tensorflow_p36/lib/python3.9/site-packages/tensorflow/python/autograph/impl/api.py", line 670, in wrapper
+    raise e.ag_error_metadata.to_exception(e)
+TypeError: in user code:
+    /home/ubuntu/git/LPCNet/training_tf2/lpcnet.py:274 call  *
+        M = (1 - alpha)*tf.gather(self.w,inputs) + alpha*tf.gather(self.w,tf.clip_by_value(inputs + 1, 0, 255))
+    /home/ubuntu/anaconda3/envs/tensorflow_p36/lib/python3.9/site-packages/tensorflow/python/util/dispatch.py:201 wrapper  **
+        return target(*args, **kwargs)
+    /home/ubuntu/anaconda3/envs/tensorflow_p36/lib/python3.9/site-packages/tensorflow/python/ops/array_ops.py:4826 gather_v2
+        return gather(
+    /home/ubuntu/anaconda3/envs/tensorflow_p36/lib/python3.9/site-packages/tensorflow/python/util/dispatch.py:201 wrapper
+        return target(*args, **kwargs)
+    /home/ubuntu/anaconda3/envs/tensorflow_p36/lib/python3.9/site-packages/tensorflow/python/ops/array_ops.py:4815 gather
+        return gen_array_ops.gather_v2(params, indices, axis, name=name)
+    /home/ubuntu/anaconda3/envs/tensorflow_p36/lib/python3.9/site-packages/tensorflow/python/ops/gen_array_ops.py:3800 gather_v2
+        _, _, _op, _outputs = _op_def_library._apply_op_helper(
+    /home/ubuntu/anaconda3/envs/tensorflow_p36/lib/python3.9/site-packages/tensorflow/python/framework/op_def_library.py:628 _apply_op_helper
+        _SatisfiesTypeConstraint(base_type,
+    /home/ubuntu/anaconda3/envs/tensorflow_p36/lib/python3.9/site-packages/tensorflow/python/framework/op_def_library.py:59 _SatisfiesTypeConstraint
+        raise TypeError(
+    TypeError: Value passed to parameter 'indices' has DataType uint8 not in list of allowed values: int32, int64
