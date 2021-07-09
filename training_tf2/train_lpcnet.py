@@ -31,7 +31,7 @@ import lpcnet
 import sys
 import numpy as np
 from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.callbacks import ModelCheckpoint
+from tensorflow.keras.callbacks import ModelCheckpoint, CSVLogger
 from ulaw import ulaw2lin, lin2ulaw
 import tensorflow.keras.backend as K
 import h5py
@@ -75,14 +75,19 @@ def interp_mulaw():
         p = y_pred[:,:,0:1]
         model_out = y_pred[:,:,1:]
         e_gt = tf_l2u(tf_u2l(y_true) - tf_u2l(p))
+        alpha = e_gt - tf.math.floor(e_gt)
+        # alpha = tf.expand_dims(alpha,axis = -1)
+        alpha = tf.tile(alpha,[1,1,256])
         e_gt = tf.cast(e_gt,'uint8')
-        sparse_cel = tf.keras.losses.SparseCategoricalCrossentropy(reduction=tf.keras.losses.Reduction.NONE)(e_gt,model_out)
+        e_gt = tf.clip_by_value(e_gt,0,254) #Check direction
+        interp_probab = (1 - alpha)*model_out + alpha*tf.roll(model_out,shift = -1,axis = -1)
+        sparse_cel = tf.keras.losses.SparseCategoricalCrossentropy(reduction=tf.keras.losses.Reduction.NONE)(e_gt,interp_probab)
         return sparse_cel
     return loss
-nb_epochs = 120
+nb_epochs = 60
 
 # Try reducing batch_size if you run out of memory on your GPU
-batch_size = 64
+batch_size = 128
 
 #Set this to True to adapt an existing model (e.g. on new data)
 adaptation = False
@@ -99,8 +104,8 @@ strategy = tf.distribute.experimental.MultiWorkerMirroredStrategy()
 
 with strategy.scope():
     model, _, _ = lpcnet.new_lpcnet_model(training=True)
-    # model.compile(optimizer=opt, loss='sparse_categorical_crossentropy', metrics=['sparse_categorical_accuracy'])
-    model.compile(optimizer=opt, loss=res_from_sigloss())
+    model.compile(optimizer=opt, loss='sparse_categorical_crossentropy', metrics=['sparse_categorical_accuracy'])
+    # model.compile(optimizer=opt, loss=res_from_sigloss())
     model.summary()
 
 feature_file = sys.argv[1]
@@ -164,4 +169,5 @@ else:
     sparsify = lpcnet.Sparsify(2000, 40000, 400, (0.05, 0.05, 0.2))
 
 model.save_weights(dir_w + 'lpcnet33e_384_00.h5');
-model.fit([in_data, features,lpcoeffs, periods], out_exc, batch_size=batch_size, epochs=nb_epochs, validation_split=0.0, callbacks=[checkpoint, sparsify])
+csv_logger = CSVLogger('diffembed.log')
+model.fit([in_data, features, lpcoeffs, periods], out_exc, batch_size=batch_size, epochs=nb_epochs, validation_split=0.0, callbacks=[checkpoint, sparsify, csv_logger])

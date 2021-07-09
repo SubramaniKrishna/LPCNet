@@ -207,8 +207,8 @@ def new_lpcnet_model(rnn_units1=384, rnn_units2=16, nb_used_features = 38, train
         md.trainable=False
         embed.Trainable=False
     
-    m_out = Concatenate()([tensor_preds,ulaw_prob])
-    model = Model([pcm, feat,lpcoeffs, pitch], m_out)
+    # m_out = Concatenate()([tensor_preds,ulaw_prob])
+    model = Model([pcm, feat,lpcoeffs, pitch], ulaw_prob)
     model.rnn_units1 = rnn_units1
     model.rnn_units2 = rnn_units2
     model.nb_used_features = nb_used_features
@@ -267,12 +267,11 @@ class diff_Embed(Layer):
         alpha = inputs - tf.math.floor(inputs)
         alpha = tf.expand_dims(alpha,axis = -1)
         alpha = tf.tile(alpha,[1,1,1,self.units])
-        inputs = tf.cast(inputs,'uint8')
+        inputs = tf.cast(inputs,'int32')
         ip_E = tf.one_hot(inputs, self.dict_size)
-        ip_Ep1 = tf.one_hot(inputs + 1, self.dict_size)
-        ip_EP1 = tf.clip_by_value(ip_Ep1, 0, 255)
-        M = (1 - alpha)*tf.matmul(ip_E, self.w) + alpha*(tf.matmul(ip_EP1, self.w))
-
+        # ip_Ep1 = tf.one_hot(tf.clip_by_value(inputs + 1, 0, 255), self.dict_size)
+        # M = (1 - alpha)*tf.matmul(ip_E, self.w) + alpha*(tf.matmul(ip_Ep1, self.w))
+        M = (1 - alpha)*tf.gather(self.w,inputs) + alpha*tf.gather(self.w,tf.clip_by_value(inputs + 1, 0, 255))
         #   print(ip_E[0,:,0,0])
         #   print(ip_E.shape,self.w.shape)
         # print(tf.matmul(ip_E, self.w).shape)
