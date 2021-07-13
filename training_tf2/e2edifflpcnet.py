@@ -38,6 +38,7 @@ from mdense import MDense
 import numpy as np
 import h5py
 import sys
+import difflpc
 
 frame_size = 160
 pcm_bits = 8
@@ -145,3 +146,115 @@ class WeightClip(Constraint):
 constraint = WeightClip(0.992)
 
 def new_lpcnet_model(rnn_units1=384, rnn_units2=16, nb_used_features = 38, training=False, adaptation=False, quantize=False):
+    pcm = Input(shape=(None, 3))
+    feat = Input(shape=(None, nb_used_features))
+    pitch = Input(shape=(None, 1))
+    dec_feat = Input(shape=(None, 128))
+    dec_state1 = Input(shape=(rnn_units1,))
+    dec_state2 = Input(shape=(rnn_units2,))
+    Input_extractor = Lambda(lambda x: K.expand_dims(x[0][:,:,x[1]],axis = -1))
+    error_calc = Lambda(lambda x: tf.roll(x[0],1,axis = -1) - x[1])
+    padding = 'valid' if training else 'same'
+    fconv1 = Conv1D(128, 3, padding=padding, activation='tanh', name='feature_conv1')
+    fconv2 = Conv1D(128, 3, padding=padding, activation='tanh', name='feature_conv2')
+
+    # Extracting LPCoeffs from Features and obtaining prediction
+    feat2lpc = difflpc.difflpc()
+    lpcoeffs,tensor_preds = feat2lpc([Input_extractor([pcm,0]),feat[:,2:17,:nb_used_features]])
+    past_errors = error_calc([Input_extractor([pcm,0]),tensor_preds])
+
+    embed = diff_Embed(name='embed_sig')
+    # print(pcm.shape,embed(pcm).shape)
+    # tensor_preds = diff_pred(name = 'diffpred')([Input_extractor([pcm,0]),lpcoeffs])
+    cpcm = Concatenate()([Input_extractor([pcm,0]),tensor_preds,past_errors])
+    cpcm = Reshape((-1, embed_size*3))(embed(cpcm))
+    cpcm_decoder = Concatenate()([Input_extractor([pcm,0]),Input_extractor([pcm,1]),Input_extractor([pcm,2])])
+    cpcm_decoder = Reshape((-1, embed_size*3))(embed(cpcm_decoder))
+    # cpcm = Concatenate()([iT(Input_extractor([pcm,0])),iT(tensor_preds),iT(Input_extractor([pcm,2]))])
+    # cpcm_decoder = Concatenate()([iT(Input_extractor([pcm,0])),iT(Input_extractor([pcm,1])),iT(Input_extractor([pcm,2]))])
+
+    pembed = Embedding(256, 64, name='embed_pitch')
+    cat_feat = Concatenate()([feat, Reshape((-1, 64))(pembed(pitch))])
+    
+    cfeat = fconv2(fconv1(cat_feat))
+
+    fdense1 = Dense(128, activation='tanh', name='feature_dense1')
+    fdense2 = Dense(128, activation='tanh', name='feature_dense2')
+
+    cfeat = fdense2(fdense1(cfeat))
+    
+    rep = Lambda(lambda x: K.repeat_elements(x, frame_size, 1))
+
+    quant = quant_regularizer if quantize else None
+
+    if training:
+        rnn = CuDNNGRU(rnn_units1, return_sequences=True, return_state=True, name='gru_a',
+              recurrent_constraint = constraint, recurrent_regularizer=quant)
+        rnn2 = CuDNNGRU(rnn_units2, return_sequences=True, return_state=True, name='gru_b',
+               kernel_constraint=constraint, kernel_regularizer=quant)
+    else:
+        rnn = GRU(rnn_units1, return_sequences=True, return_state=True, recurrent_activation="sigmoid", reset_after='true', name='gru_a',
+              recurrent_constraint = constraint, recurrent_regularizer=quant)
+        rnn2 = GRU(rnn_units2, return_sequences=True, return_state=True, recurrent_activation="sigmoid", reset_after='true', name='gru_b',
+               kernel_constraint=constraint, kernel_regularizer=quant)
+
+    rnn_in = Concatenate()([cpcm, rep(cfeat)])
+    md = MDense(pcm_levels, activation='softmax', name='dual_fc')
+    gru_out1, _ = rnn(rnn_in)
+    gru_out2, _ = rnn2(Concatenate()([gru_out1, rep(cfeat)]))
+    ulaw_prob = md(gru_out2)
+    
+    if adaptation:
+        rnn.trainable=False
+        rnn2.trainable=False
+        md.trainable=False
+        embed.Trainable=False
+    
+    m_out = Concatenate()([tensor_preds,ulaw_prob])
+    model = Model([pcm, feat, pitch], m_out)
+    model.rnn_units1 = rnn_units1
+    model.rnn_units2 = rnn_units2
+    model.nb_used_features = nb_used_features
+    model.frame_size = frame_size
+
+    encoder = Model([feat, pitch], cfeat)
+    
+    dec_rnn_in = Concatenate()([cpcm_decoder, dec_feat])
+    dec_gru_out1, state1 = rnn(dec_rnn_in, initial_state=dec_state1)
+    dec_gru_out2, state2 = rnn2(Concatenate()([dec_gru_out1, dec_feat]), initial_state=dec_state2)
+    dec_ulaw_prob = md(dec_gru_out2)
+
+    decoder = Model([pcm, dec_feat, dec_state1, dec_state2], [dec_ulaw_prob, state1, state2])
+    return model, encoder, decoder
+
+class diff_Embed(Layer):
+
+    def __init__(self, units=128, dict_size = 256, **kwargs):
+        super(diff_Embed, self).__init__(**kwargs)
+        self.units = units
+        self.dict_size = dict_size
+
+    def build(self, input_shape):  # Create the state of the layer (weights)
+        w_init = tf.random_normal_initializer()
+        self.w = tf.Variable(initial_value=w_init(shape=(self.dict_size, self.units),dtype='float32'),trainable=True)
+
+    def call(self, inputs):  # Defines the computation from inputs to outputs
+        alpha = inputs - tf.math.floor(inputs)
+        alpha = tf.expand_dims(alpha,axis = -1)
+        alpha = tf.tile(alpha,[1,1,1,self.units])
+        inputs = tf.cast(inputs,'int32')
+        ip_E = tf.one_hot(inputs, self.dict_size)
+        # ip_Ep1 = tf.one_hot(tf.clip_by_value(inputs + 1, 0, 255), self.dict_size)
+        # M = (1 - alpha)*tf.matmul(ip_E, self.w) + alpha*(tf.matmul(ip_Ep1, self.w))
+        M = (1 - alpha)*tf.gather(self.w,inputs) + alpha*tf.gather(self.w,tf.clip_by_value(inputs + 1, 0, 255))
+        #   print(ip_E[0,:,0,0])
+        #   print(ip_E.shape,self.w.shape)
+        # print(tf.matmul(ip_E, self.w).shape)
+        return M
+
+    def get_config(self):
+        config = super(diff_Embed, self).get_config()
+        config.update({"units": self.units})
+        config.update({"dict_size" : self.dict_size})
+        return config
+
