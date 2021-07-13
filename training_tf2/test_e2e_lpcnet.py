@@ -64,8 +64,8 @@ features[:,:,18:36] = 0
 periods = (.1 + 50*features[:,:,36:37]+100).astype('int16')
 
 
-dir_w = './model_weights/e2e_probcompensate/'
-model.load_weights(dir_w + 'lpcnet33e_384_49.h5')
+dir_w = './model_weights/e2e_fixedlpc/'
+model.load_weights(dir_w + 'lpcnet33e_384_60.h5')
 
 model_lpcextraction = difflpc.difflpc()
 model_lpcextraction.load_weights('/home/ubuntu/git/LPCNet/model_weights/difflpc/rcplusmse_test_ntt_10.h5')
@@ -86,9 +86,9 @@ fout = open(out_file, 'wb')
 
 skip = order + 1
 for c in range(0, nb_frames):
-    cfeat = enc.predict([features[c:c+1, :, :nb_used_features], periods[c:c+1, :, :]])
-    lpcs = lpc_coeffs([np.zeros((features.shape[0],2400,1)),features[c:c+1, :, :nb_used_features]])[0]
-    print(features.shape,lpcs.shape)
+    cfeat,lpcs = enc.predict([features[c:c+1, :, :nb_used_features], periods[c:c+1, :, :]])
+    # lpcs = lpc_coeffs([np.zeros((features.shape[0],2400,1)),features[c:c+1, :, :nb_used_features]])[0]
+    # print(features.shape,lpcs.shape)
     for fr in range(0, feature_chunk_size):
         f = c*feature_chunk_size + fr
         # a = features[c, fr, nb_features-order:]

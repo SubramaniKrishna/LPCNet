@@ -159,8 +159,9 @@ def new_lpcnet_model(rnn_units1=384, rnn_units2=16, nb_used_features = 38, train
     fconv2 = Conv1D(128, 3, padding=padding, activation='tanh', name='feature_conv2')
 
     # Extracting LPCoeffs from Features and obtaining prediction
-    feat2lpc = difflpc.difflpc()
-    lpcoeffs,tensor_preds = feat2lpc([Input_extractor([pcm,0]),feat[:,2:17,:nb_used_features]])
+    feat2lpc = difflpc.difflpc(training = True)
+    lpcoeffs = feat2lpc(feat)
+    tensor_preds = diff_pred(name = "lpc2preds")([Input_extractor([pcm,0]),lpcoeffs])
     past_errors = error_calc([Input_extractor([pcm,0]),tensor_preds])
 
     embed = diff_Embed(name='embed_sig')
@@ -217,7 +218,7 @@ def new_lpcnet_model(rnn_units1=384, rnn_units2=16, nb_used_features = 38, train
     model.nb_used_features = nb_used_features
     model.frame_size = frame_size
 
-    encoder = Model([feat, pitch], cfeat)
+    encoder = Model([feat, pitch], [cfeat,lpcoeffs])
     
     dec_rnn_in = Concatenate()([cpcm_decoder, dec_feat])
     dec_gru_out1, state1 = rnn(dec_rnn_in, initial_state=dec_state1)
@@ -258,3 +259,31 @@ class diff_Embed(Layer):
         config.update({"dict_size" : self.dict_size})
         return config
 
+scale = 255.0/32768.0
+scale_1 = 32768.0/255.0
+def tf_l2u(x):
+    s = K.sign(x)
+    x = K.abs(x)
+    u = (s*(128*K.log(1+scale*x)/K.log(256.0)))
+    u = K.clip(128 + u, 0, 255)
+    return u
+
+def tf_u2l(u):
+    u = u - 128.0
+    s = K.sign(u)
+    u = K.abs(u)
+    return s*scale_1*(K.exp(u/128.*K.log(256.0))-1)
+
+lpcoeffs_N = 16
+class diff_pred(Layer):
+    def call(self, inputs):
+        xt = tf_u2l(inputs[0])
+        lpc = inputs[1]
+
+        rept = Lambda(lambda x: K.repeat_elements(x , frame_size, 1))
+        zpX = Lambda(lambda x: K.concatenate([0*x[:,0:lpcoeffs_N,:], x],axis = 1))
+        cX = Lambda(lambda x: K.concatenate([x[:,(lpcoeffs_N - i):(lpcoeffs_N - i + 2400),:] for i in range(lpcoeffs_N)],axis = 2))
+        
+        pred = -Multiply()([rept(lpc),cX(zpX(xt))])
+
+        return tf_l2u(K.sum(pred,axis = 2,keepdims = True))

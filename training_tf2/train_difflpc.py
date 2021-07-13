@@ -25,10 +25,14 @@ class diff_lpc2rc(Layer):
             rc_init = Lrc([rc_init[:,:,:(j - 1)],rc_init[:,:,(j - 1):]])
         return rc_init
 
-def mse_rc():
+def mse_lar_rc():
     def loss(y_true,y_pred):
-        # y_true = diff_lpc2rc()(y_true)
-        squared_difference = K.square(y_true - y_pred)
+        y_true = diff_lpc2rc()(y_true)
+        y_pred = diff_lpc2rc()(y_pred)
+        LAR_true = K.log((1.0001 + y_true)/(1.0001 - y_true))
+        LAR_pred = K.log((1.0001 + y_pred)/(1.0001 - y_pred))
+        squared_difference = K.square(LAR_true - LAR_pred)
+        # squared_difference = K.square(y_true - y_pred)
         return tf.reduce_mean(squared_difference, axis=-1)
     return loss
 
@@ -59,7 +63,7 @@ def normalized_mse():
 
 # set_session(tf.Session(config=config))
 
-nb_epochs = 10
+nb_epochs = 50
 
 # Try reducing batch_size if you run out of memory on your GPU
 batch_size = 64
@@ -105,9 +109,9 @@ lpcoeffs = features[:, :, nb_used_features+1:]
 features = features[:, :, :nb_used_features]
 features[:,:,18:36] = 0
 
-# fpad1 = np.concatenate([features[0:1, 0:2, :], features[:-1, -2:, :]], axis=0)
-# fpad2 = np.concatenate([features[1:, :2, :], features[0:1, -2:, :]], axis=0)
-# features = np.concatenate([fpad1, features, fpad2], axis=1)
+fpad1 = np.concatenate([features[0:1, 0:2, :], features[:-1, -2:, :]], axis=0)
+fpad2 = np.concatenate([features[1:, :2, :], features[0:1, -2:, :]], axis=0)
+features = np.concatenate([fpad1, features, fpad2], axis=1)
 # lpad1 = np.concatenate([lpcoeffs[0:1, 0:2, :], lpcoeffs[:-1, -2:, :]], axis=0)
 # lpad2 = np.concatenate([lpcoeffs[1:, :2, :], lpcoeffs[0:1, -2:, :]], axis=0)
 # lpcoeffs = np.concatenate([lpad1, lpcoeffs, lpad2], axis=1)
@@ -123,7 +127,7 @@ periods = (.1 + 50*features[:,:,36:37]+100).astype('int16')
 
 # dump models to disk as we go
 dir_w = './model_weights/difflpc/'
-checkpoint = ModelCheckpoint(dir_w + 'rcplusmse_test_' + dset + '_{epoch:02d}.h5')
+checkpoint = ModelCheckpoint(dir_w + 'rc_lar_' + dset + '_{epoch:02d}.h5')
 
 # #Set this to True to adapt an existing model (e.g. on new data)
 # adaptation = False
@@ -140,17 +144,17 @@ checkpoint = ModelCheckpoint(dir_w + 'rcplusmse_test_' + dset + '_{epoch:02d}.h5
 #     lr = 0.001
 #     decay = 5e-5
 
-losses = {
-	"rc2lpc": mse_rc(),
-	"prediction": normalized_mse(),
-}
-lossWeights = {"rc2lpc": 0.0, "prediction": 1.0}
+# losses = {
+# 	"rc2lpc": mse_rc(),
+# 	"prediction": normalized_mse(),
+# }
+# lossWeights = {"rc2lpc": 0.0, "prediction": 1.0}
 
-lr = 0.01
+lr = 0.001
 decay = 5e-5
-model.compile(optimizer=Adam(lr, amsgrad=True, decay=decay), loss=losses,loss_weights = lossWeights)
-model.save_weights(dir_w + 'rcplusmse_test_' + dset + '_00.h5')
-model.fit([sig, features], [lpcoeffs,out_exc], batch_size=batch_size, epochs=nb_epochs, validation_split=0.0, callbacks=[checkpoint])
+model.compile(optimizer=Adam(lr, amsgrad=True, decay=decay), loss=mse_lar_rc())
+model.save_weights(dir_w + 'rc_lar_' + dset + '_00.h5')
+model.fit(features, lpcoeffs, batch_size=batch_size, epochs=nb_epochs, validation_split=0.0, callbacks=[checkpoint])
 # print(in_data)
 # OG
 # model.fit([in_data, features, periods], out_exc, batch_size=batch_size, epochs=nb_epochs, validation_split=0.0, callbacks=[checkpoint, sparsify])

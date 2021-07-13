@@ -44,6 +44,20 @@ def tf_u2l(u):
     u = K.abs(u)
     return s*scale_1*(K.exp(u/128.*K.log(256.0))-1)
 
+lpcoeffs_N = 16
+class diff_pred(Layer):
+    def call(self, inputs):
+        xt = tf_u2l(inputs[0])
+        lpc = inputs[1]
+
+        rept = Lambda(lambda x: K.repeat_elements(x , frame_size, 1))
+        zpX = Lambda(lambda x: K.concatenate([0*x[:,0:lpcoeffs_N,:], x],axis = 1))
+        cX = Lambda(lambda x: K.concatenate([x[:,(lpcoeffs_N - i):(lpcoeffs_N - i + 2400),:] for i in range(lpcoeffs_N)],axis = 2))
+        
+        pred = -Multiply()([rept(lpc),cX(zpX(xt))])
+
+        return tf_l2u(K.sum(pred,axis = 2,keepdims = True))
+
 feature_file = sys.argv[1]
 pcm_file = sys.argv[2]
 
@@ -72,29 +86,29 @@ lpcoeffs = features[:, :, nb_used_features+1:]
 features = features[:, :, :nb_used_features]
 features[:,:,18:36] = 0
 
-list_weightfiles = ['/home/ubuntu/git/LPCNet/model_weights/difflpc/rcplusmse_test_ntt_10.h5']
+list_weightfiles = ['/home/ubuntu/git/LPCNet/model_weights/difflpc/rc_lar_ntt_01.h5']
 
 for file in list_weightfiles:
     dset = file.split('/')[-1].split('_')[2]
     print(dset)
-    np.random.seed(28)
+    np.random.seed(36)
 
-    model = difflpc.difflpc(training=False)
-    model.load_weights(file)
+    lpc_coeffs = difflpc.difflpc(training=False)
+    lpc_coeffs.load_weights(file)
 
-    layer_name = 'rc2lpc'
+    # layer_name = 'rc2lpc'
     # if dset == 'mcgill':
         # layer_name = 'diff_rc2lpc_1'
-    lpc_coeffs = Model(inputs=model.input,outputs=model.get_layer(layer_name).output)
+    # lpc_coeffs = Model(inputs=model.input,outputs=model.get_layer(layer_name).output)
 
     inp_test = K.constant(features[:16,:,:])
     inp_mock = K.constant(sig[:16,:,:])
     input_sig = K.constant(out_exc[:16,:,:])
     inp_lpc = lpcoeffs[:16,:,:]
-    lpc_model = lpc_coeffs([inp_mock,inp_test])
+    lpc_model = lpc_coeffs(inp_test)
+    model_preds = diff_pred()([inp_mock,lpc_model])
     lpc_model = lpc_model.numpy()
-    model_preds = model([inp_mock,inp_test])
-    model_preds = model_preds[1].numpy()
+    model_preds = model_preds.numpy()
 
     nauds = 5
     pyp.figure()
