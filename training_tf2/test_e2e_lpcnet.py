@@ -42,7 +42,7 @@ import tensorflow as tf
 # config.gpu_options.per_process_gpu_memory_fraction = 0.2
 # set_session(tf.Session(config=config))
 
-model, enc, dec = lpcnet.new_lpcnet_model()
+model, enc, dec = lpcnet.new_lpcnet_model(training = False)
 
 model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['sparse_categorical_accuracy'])
 #model.summary()
@@ -64,13 +64,9 @@ features[:,:,18:36] = 0
 periods = (.1 + 50*features[:,:,36:37]+100).astype('int16')
 
 
-dir_w = './model_weights/e2e_fixedlpc/'
+dir_w = './model_weights/e2e_fixedlpc_noninterploss/'
 model.load_weights(dir_w + 'lpcnet33e_384_60.h5')
 
-model_lpcextraction = difflpc.difflpc()
-model_lpcextraction.load_weights('/home/ubuntu/git/LPCNet/model_weights/difflpc/rcplusmse_test_ntt_10.h5')
-layer_name = 'rc2lpc'
-lpc_coeffs = Model(inputs=model_lpcextraction.input,outputs=model_lpcextraction.get_layer(layer_name).output)
 
 order = 16
 
@@ -88,11 +84,10 @@ skip = order + 1
 for c in range(0, nb_frames):
     cfeat,lpcs = enc.predict([features[c:c+1, :, :nb_used_features], periods[c:c+1, :, :]])
     # lpcs = lpc_coeffs([np.zeros((features.shape[0],2400,1)),features[c:c+1, :, :nb_used_features]])[0]
-    # print(features.shape,lpcs.shape)
     for fr in range(0, feature_chunk_size):
         f = c*feature_chunk_size + fr
         # a = features[c, fr, nb_features-order:]
-        a = lpcs[fr]
+        a = lpcs[c,fr]
         for i in range(skip, frame_size):
             pred = -sum(a*pcm[f*frame_size + i - 1:f*frame_size + i - order-1:-1])
             fexc[0, 0, 1] = lin2ulaw(pred)

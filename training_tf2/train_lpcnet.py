@@ -66,6 +66,7 @@ def res_from_sigloss():
         p = y_pred[:,:,0:1]
         model_out = y_pred[:,:,1:]
         e_gt = tf_l2u(tf_u2l(y_true) - tf_u2l(p))
+        e_gt = tf.round(e_gt)
         e_gt = tf.cast(e_gt,'uint8')
         sparse_cel = tf.keras.losses.SparseCategoricalCrossentropy(reduction=tf.keras.losses.Reduction.NONE)(e_gt,model_out)
         return sparse_cel
@@ -87,10 +88,23 @@ def interp_mulaw():
         return loss_mod
     return loss
 
+def metric_icel(y_true, y_pred):
+    p = y_pred[:,:,0:1]
+    model_out = y_pred[:,:,1:]
+    e_gt = tf_l2u(tf_u2l(y_true) - tf_u2l(p))
+    alpha = e_gt - tf.math.floor(e_gt)
+    alpha = tf.tile(alpha,[1,1,256])
+    e_gt = tf.cast(e_gt,'uint8')
+    e_gt = tf.clip_by_value(e_gt,0,254) #Check direction
+    interp_probab = (1 - alpha)*model_out + alpha*tf.roll(model_out,shift = -1,axis = -1)
+    sparse_cel = tf.keras.losses.SparseCategoricalCrossentropy(reduction=tf.keras.losses.Reduction.NONE)(e_gt,interp_probab)
+    return sparse_cel
+
 def metric_cel(y_true, y_pred):
     p = y_pred[:,:,0:1]
     model_out = y_pred[:,:,1:]
     e_gt = tf_l2u(tf_u2l(y_true) - tf_u2l(p))
+    e_gt = tf.round(e_gt)
     e_gt = tf.cast(e_gt,'uint8')
     e_gt = tf.clip_by_value(e_gt,0,255) #Check direction
     sparse_cel = tf.keras.losses.SparseCategoricalCrossentropy(reduction=tf.keras.losses.Reduction.NONE)(e_gt,model_out)
@@ -124,10 +138,10 @@ with strategy.scope():
     model, _, _ = lpcnet.new_lpcnet_model(training=True)
     # model.compile(optimizer=opt, loss='sparse_categorical_crossentropy', metrics=['sparse_categorical_accuracy'])
     model.get_layer("f2lpc").load_weights('/home/ubuntu/git/LPCNet/model_weights/difflpc/rc_lar_ntt_50.h5')
-    for l in range(len(model.get_layer("f2lpc").layers)):
-        model.get_layer("f2lpc").layers[l].trainable = False
+    # for l in range(len(model.get_layer("f2lpc").layers)):
+    #     model.get_layer("f2lpc").layers[l].trainable = False
     # model.get_layer("model").trainable = False
-    model.compile(optimizer=opt, loss=res_from_sigloss(),metrics=[metric_cel,metric_exc_sd])
+    model.compile(optimizer=opt, loss=interp_mulaw(),metrics=[metric_cel,metric_icel,metric_exc_sd])
         # print(l.name, l.trainable)
     # print(model.layers)
     model.summary()
@@ -181,7 +195,7 @@ del pred
 del in_exc
 
 # dump models to disk as we go
-dir_w = './model_weights/e2e_fixedlpc_noninterploss/'
+dir_w = './model_weights/e2e_initlpc_interploss/'
 checkpoint = ModelCheckpoint(dir_w + 'lpcnet33e_384_{epoch:02d}.h5')
 
 if adaptation:
@@ -193,5 +207,5 @@ else:
     sparsify = lpcnet.Sparsify(2000, 40000, 400, (0.05, 0.05, 0.2))
 
 model.save_weights(dir_w + 'lpcnet33e_384_00.h5');
-csv_logger = CSVLogger('e2e_fixedlpc_noninterploss.log')
+csv_logger = CSVLogger('e2e_initlpc_interploss.log')
 model.fit([in_data, features, periods], out_exc, batch_size=batch_size, epochs=nb_epochs, validation_split=0.0, callbacks=[checkpoint, sparsify, csv_logger])

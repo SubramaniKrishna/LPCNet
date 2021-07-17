@@ -103,7 +103,8 @@ class Sparsify(Callback):
             
 
 class PCMInit(Initializer):
-    def __init__(self, gain=.1, seed=None):
+    def __init__(self, gain=.1, seed=None,**kwargs):
+        super(PCMInit, self).__init__(**kwargs)
         self.gain = gain
         self.seed = seed
 
@@ -119,7 +120,7 @@ class PCMInit(Initializer):
         #a[:,0] = math.sqrt(12)*np.arange(-.5*num_rows+.5,.5*num_rows-.4)/num_rows
         #a[:,1] = .5*a[:,0]*a[:,0]*a[:,0]
         a = a + np.reshape(math.sqrt(12)*np.arange(-.5*num_rows+.5,.5*num_rows-.4)/num_rows, (num_rows, 1))
-        return self.gain * a
+        return self.gain * a.astype("float32")
 
     def get_config(self):
         return {
@@ -153,13 +154,13 @@ def new_lpcnet_model(rnn_units1=384, rnn_units2=16, nb_used_features = 38, train
     dec_state1 = Input(shape=(rnn_units1,))
     dec_state2 = Input(shape=(rnn_units2,))
     Input_extractor = Lambda(lambda x: K.expand_dims(x[0][:,:,x[1]],axis = -1))
-    error_calc = Lambda(lambda x: tf.roll(x[0],1,axis = -1) - x[1])
+    error_calc = Lambda(lambda x: tf_l2u(tf_u2l(x[0]) - tf.roll(tf_u2l(x[1]),1,axis = 1)))
     padding = 'valid' if training else 'same'
     fconv1 = Conv1D(128, 3, padding=padding, activation='tanh', name='feature_conv1')
     fconv2 = Conv1D(128, 3, padding=padding, activation='tanh', name='feature_conv2')
 
     # Extracting LPCoeffs from Features and obtaining prediction
-    feat2lpc = difflpc.difflpc(training = True)
+    feat2lpc = difflpc.difflpc(training = training)
     lpcoeffs = feat2lpc(feat)
     tensor_preds = diff_pred(name = "lpc2preds")([Input_extractor([pcm,0]),lpcoeffs])
     past_errors = error_calc([Input_extractor([pcm,0]),tensor_preds])
@@ -230,13 +231,16 @@ def new_lpcnet_model(rnn_units1=384, rnn_units2=16, nb_used_features = 38, train
 
 class diff_Embed(Layer):
 
-    def __init__(self, units=128, dict_size = 256, **kwargs):
+    def __init__(self, units=128, dict_size = 256,pcm_init = True, **kwargs):
         super(diff_Embed, self).__init__(**kwargs)
         self.units = units
         self.dict_size = dict_size
+        self.pcm_init = pcm_init
 
     def build(self, input_shape):  # Create the state of the layer (weights)
         w_init = tf.random_normal_initializer()
+        if self.pcm_init:  
+            w_init = PCMInit()
         self.w = tf.Variable(initial_value=w_init(shape=(self.dict_size, self.units),dtype='float32'),trainable=True)
 
     def call(self, inputs):  # Defines the computation from inputs to outputs
@@ -257,6 +261,7 @@ class diff_Embed(Layer):
         config = super(diff_Embed, self).get_config()
         config.update({"units": self.units})
         config.update({"dict_size" : self.dict_size})
+        config.update({"pcm_init" : self.pcm_init})
         return config
 
 scale = 255.0/32768.0

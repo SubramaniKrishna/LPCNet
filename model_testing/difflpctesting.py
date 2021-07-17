@@ -58,6 +58,8 @@ class diff_pred(Layer):
 
         return tf_l2u(K.sum(pred,axis = 2,keepdims = True))
 
+error_calc = Lambda(lambda x: tf_l2u(tf_u2l(x[0]) - tf.roll(tf_u2l(x[1]),1,axis = 1)))
+
 feature_file = sys.argv[1]
 pcm_file = sys.argv[2]
 
@@ -86,12 +88,12 @@ lpcoeffs = features[:, :, nb_used_features+1:]
 features = features[:, :, :nb_used_features]
 features[:,:,18:36] = 0
 
-list_weightfiles = ['/home/ubuntu/git/LPCNet/model_weights/difflpc/rc_lar_ntt_01.h5']
+list_weightfiles = ['/home/ubuntu/git/LPCNet/model_weights/difflpc/rc_lar_ntt_50.h5']
 
 for file in list_weightfiles:
     dset = file.split('/')[-1].split('_')[2]
     print(dset)
-    np.random.seed(36)
+    np.random.seed(333)
 
     lpc_coeffs = difflpc.difflpc(training=False)
     lpc_coeffs.load_weights(file)
@@ -109,6 +111,7 @@ for file in list_weightfiles:
     model_preds = diff_pred()([inp_mock,lpc_model])
     lpc_model = lpc_model.numpy()
     model_preds = model_preds.numpy()
+    res_delay = error_calc([inp_mock,model_preds])
 
     nauds = 5
     pyp.figure()
@@ -122,24 +125,29 @@ for file in list_weightfiles:
         G_model = (np.linalg.norm(x_framed - ulaw2lin(model_preds[aud_ind,frame_input*frame_size:(frame_input + 1)*frame_size,:])))
         lpc_frame_model = lpc_model[aud_ind,frame_input]
         lpcw_model,lpch_model = freqz(G_model,np.insert(lpc_frame_model,0,1),frame_size//2)
-
-        pyp.subplot(nauds,3,3*i + 1)
+        res_frame = res_delay[aud_ind,frame_input*frame_size:(frame_input + 1)*frame_size,:]
+        
+        pyp.subplot(nauds,4,4*i + 1)
         pyp.title("Spectral Envelopes")
         pyp.plot(np.log(np.abs(np.fft.fft(x_framed[:,0]))[:frame_size//2]),'b')
         pyp.plot(np.log(np.abs(lpch)),'g')
         pyp.plot(np.log(np.abs(lpch_model)),'r')
 
-        pyp.subplot(nauds,3,3*i + 2)
+        pyp.subplot(nauds,4,4*i + 2)
         pyp.title(str(G_gt))
         pyp.plot(x_framed,'b')
         pyp.plot(ulaw2lin(pred[aud_ind,frame_input*frame_size:(frame_input + 1)*frame_size,:]),'g')
         pyp.plot(x_framed - ulaw2lin(pred[aud_ind,frame_input*frame_size:(frame_input + 1)*frame_size,:]),'k')
 
-        pyp.subplot(nauds,3,3*i + 3)
+        pyp.subplot(nauds,4,4*i + 3)
         pyp.title(str(G_model))
         pyp.plot(x_framed,'b')
         pyp.plot(ulaw2lin(model_preds[aud_ind,frame_input*frame_size:(frame_input + 1)*frame_size,:]),'g')
         pyp.plot(x_framed - ulaw2lin(model_preds[aud_ind,frame_input*frame_size:(frame_input + 1)*frame_size,:]),'k')
 
+        pyp.subplot(nauds,4,4*i + 4)
+        pyp.plot((x_framed - ulaw2lin(pred[aud_ind,frame_input*frame_size:(frame_input + 1)*frame_size,:]))[:20],'k')
+        pyp.plot(tf_u2l(res_frame[1:])[:20],'r')
+
     pyp.tight_layout()
-    pyp.savefig('./LPC_plots_' + dset + '_.png')
+    pyp.savefig('./LPC_plots_testing_' + dset + '_.png')
