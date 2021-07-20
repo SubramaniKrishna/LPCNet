@@ -1,17 +1,13 @@
 #!/usr/bin/python3
 '''Copyright (c) 2018 Mozilla
-
    Redistribution and use in source and binary forms, with or without
    modification, are permitted provided that the following conditions
    are met:
-
    - Redistributions of source code must retain the above copyright
    notice, this list of conditions and the following disclaimer.
-
    - Redistributions in binary form must reproduce the above copyright
    notice, this list of conditions and the following disclaimer in the
    documentation and/or other materials provided with the distribution.
-
    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
    ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
    LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
@@ -27,12 +23,11 @@
 
 # Train a LPCNet model (note not a Wavenet model)
 
-# import lpcnet
-import e2edifflpcnet as lpcnet
+import lpcnet
 import sys
 import numpy as np
 from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.callbacks import ModelCheckpoint, CSVLogger
+from tensorflow.keras.callbacks import ModelCheckpoint
 from ulaw import ulaw2lin, lin2ulaw
 import tensorflow.keras.backend as K
 import h5py
@@ -45,78 +40,7 @@ import tensorflow as tf
 #  except RuntimeError as e:
 #    print(e)
 
-scale = 255.0/32768.0
-scale_1 = 32768.0/255.0
-def tf_l2u(x):
-    s = K.sign(x)
-    x = K.abs(x)
-    u = (s*(128*K.log(1+scale*x)/K.log(256.0)))
-    u = K.clip(128 + u, 0, 255)
-    return u
-
-def tf_u2l(u):
-    u = tf.cast(u,"float32")
-    u = u - 128.0
-    s = K.sign(u)
-    u = K.abs(u)
-    return s*scale_1*(K.exp(u/128.*K.log(256.0))-1)
-
-def res_from_sigloss():
-    def loss(y_true,y_pred):
-        p = y_pred[:,:,0:1]
-        model_out = y_pred[:,:,1:]
-        e_gt = tf_l2u(tf_u2l(y_true) - tf_u2l(p))
-        e_gt = tf.round(e_gt)
-        e_gt = tf.cast(e_gt,'uint8')
-        sparse_cel = tf.keras.losses.SparseCategoricalCrossentropy(reduction=tf.keras.losses.Reduction.NONE)(e_gt,model_out)
-        return sparse_cel
-    return loss
-
-def interp_mulaw():
-    def loss(y_true,y_pred):
-        p = y_pred[:,:,0:1]
-        model_out = y_pred[:,:,1:]
-        e_gt = tf_l2u(tf_u2l(y_true) - tf_u2l(p))
-        prob_compensation = tf.squeeze((K.abs(e_gt - 128)/128.0)*K.log(256.0))
-        alpha = e_gt - tf.math.floor(e_gt)
-        alpha = tf.tile(alpha,[1,1,256])
-        e_gt = tf.cast(e_gt,'uint8')
-        e_gt = tf.clip_by_value(e_gt,0,254) #Check direction
-        interp_probab = (1 - alpha)*model_out + alpha*tf.roll(model_out,shift = -1,axis = -1)
-        sparse_cel = tf.keras.losses.SparseCategoricalCrossentropy(reduction=tf.keras.losses.Reduction.NONE)(e_gt,interp_probab)
-        loss_mod = sparse_cel + prob_compensation
-        return loss_mod
-    return loss
-
-def metric_icel(y_true, y_pred):
-    p = y_pred[:,:,0:1]
-    model_out = y_pred[:,:,1:]
-    e_gt = tf_l2u(tf_u2l(y_true) - tf_u2l(p))
-    alpha = e_gt - tf.math.floor(e_gt)
-    alpha = tf.tile(alpha,[1,1,256])
-    e_gt = tf.cast(e_gt,'uint8')
-    e_gt = tf.clip_by_value(e_gt,0,254) #Check direction
-    interp_probab = (1 - alpha)*model_out + alpha*tf.roll(model_out,shift = -1,axis = -1)
-    sparse_cel = tf.keras.losses.SparseCategoricalCrossentropy(reduction=tf.keras.losses.Reduction.NONE)(e_gt,interp_probab)
-    return sparse_cel
-
-def metric_cel(y_true, y_pred):
-    p = y_pred[:,:,0:1]
-    model_out = y_pred[:,:,1:]
-    e_gt = tf_l2u(tf_u2l(y_true) - tf_u2l(p))
-    e_gt = tf.round(e_gt)
-    e_gt = tf.cast(e_gt,'uint8')
-    e_gt = tf.clip_by_value(e_gt,0,255) #Check direction
-    sparse_cel = tf.keras.losses.SparseCategoricalCrossentropy(reduction=tf.keras.losses.Reduction.NONE)(e_gt,model_out)
-    return sparse_cel
-
-def metric_exc_sd(y_true,y_pred):
-    p = y_pred[:,:,0:1]
-    e_gt = tf_l2u(tf_u2l(y_true) - tf_u2l(p))
-    sd_egt = tf.keras.losses.MeanSquaredError(reduction=tf.keras.losses.Reduction.NONE)(e_gt,128)
-    return sd_egt
-
-nb_epochs = 60
+nb_epochs = 120
 
 # Try reducing batch_size if you run out of memory on your GPU
 batch_size = 128
@@ -136,14 +60,7 @@ strategy = tf.distribute.experimental.MultiWorkerMirroredStrategy()
 
 with strategy.scope():
     model, _, _ = lpcnet.new_lpcnet_model(training=True)
-    # model.compile(optimizer=opt, loss='sparse_categorical_crossentropy', metrics=['sparse_categorical_accuracy'])
-    model.get_layer("f2lpc").load_weights('/home/ubuntu/git/LPCNet/model_weights/difflpc/rc_lar_ntt_50.h5')
-    # for l in range(len(model.get_layer("f2lpc").layers)):
-    #     model.get_layer("f2lpc").layers[l].trainable = False
-    # model.get_layer("model").trainable = False
-    model.compile(optimizer=opt, loss=interp_mulaw(),metrics=[metric_cel,metric_icel,metric_exc_sd])
-        # print(l.name, l.trainable)
-    # print(model.layers)
+    model.compile(optimizer=opt, loss='sparse_categorical_crossentropy', metrics=['sparse_categorical_accuracy'])
     model.summary()
 
 feature_file = sys.argv[1]
@@ -176,7 +93,6 @@ del data
 print("ulaw std = ", np.std(out_exc))
 
 features = np.reshape(features, (nb_frames, feature_chunk_size, nb_features))
-lpcoeffs = features[:, :, nb_used_features+1:]
 features = features[:, :, :nb_used_features]
 features[:,:,18:36] = 0
 
@@ -195,8 +111,7 @@ del pred
 del in_exc
 
 # dump models to disk as we go
-dir_w = './model_weights/e2e_initlpc_interploss/'
-checkpoint = ModelCheckpoint(dir_w + 'lpcnet33e_384_{epoch:02d}.h5')
+checkpoint = ModelCheckpoint('lpcnet33e_384_{epoch:02d}.h5')
 
 if adaptation:
     #Adapting from an existing model
@@ -206,6 +121,5 @@ else:
     #Training from scratch
     sparsify = lpcnet.Sparsify(2000, 40000, 400, (0.05, 0.05, 0.2))
 
-model.save_weights(dir_w + 'lpcnet33e_384_00.h5');
-csv_logger = CSVLogger('e2e_initlpc_interploss.log')
-model.fit([in_data, features, periods], out_exc, batch_size=batch_size, epochs=nb_epochs, validation_split=0.0, callbacks=[checkpoint, sparsify, csv_logger])
+model.save_weights('lpcnet33e_384_00.h5');
+model.fit([in_data, features, periods], out_exc, batch_size=batch_size, epochs=nb_epochs, validation_split=0.0, callbacks=[checkpoint, sparsify])
