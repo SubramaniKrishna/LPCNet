@@ -74,7 +74,6 @@ void compute_noise(int *noise, float noise_std) {
   }
 }
 
-#ifdef END2END
 void write_audio(LPCNetEncState *st, const short *pcm, const int *noise, FILE *file) {
   int i, k;
   for (k=0;k<4;k++) {
@@ -92,7 +91,11 @@ void write_audio(LPCNetEncState *st, const short *pcm, const int *noise, FILE *f
     /* Excitation in. */
     data[4*i+2] = st->exc_mem;
     /* Excitation out. */
-    data[4*i+3] = lin2ulaw(pcm[k*FRAME_SIZE+i]);
+    #ifdef END2END
+      data[4*i+3] = lin2ulaw(pcm[k*FRAME_SIZE+i]);
+    #else
+      data[4*i+3] = e;
+    #endif
     /* Simulate error on excitation. */
     e += noise[k*FRAME_SIZE+i];
     e = IMIN(255, IMAX(0, e));
@@ -104,37 +107,6 @@ void write_audio(LPCNetEncState *st, const short *pcm, const int *noise, FILE *f
   fwrite(data, 4*FRAME_SIZE, 1, file);
   }
 }
-#else
-void write_audio(LPCNetEncState *st, const short *pcm, const int *noise, FILE *file) {
-  int i, k;
-  for (k=0;k<4;k++) {
-  unsigned char data[4*FRAME_SIZE];
-  for (i=0;i<FRAME_SIZE;i++) {
-    float p=0;
-    float e;
-    int j;
-    for (j=0;j<LPC_ORDER;j++) p -= st->features[k][2*NB_BANDS+3+j]*st->sig_mem[j];
-    e = lin2ulaw(pcm[k*FRAME_SIZE+i] - p);
-    /* Signal. */
-    data[4*i] = lin2ulaw(st->sig_mem[0]);
-    /* Prediction. */
-    data[4*i+1] = lin2ulaw(p);
-    /* Excitation in. */
-    data[4*i+2] = st->exc_mem;
-    /* Excitation out. */
-    data[4*i+3] = e;
-    /* Simulate error on excitation. */
-    e += noise[k*FRAME_SIZE+i];
-    e = IMIN(255, IMAX(0, e));
-    
-    RNN_MOVE(&st->sig_mem[1], &st->sig_mem[0], LPC_ORDER-1);
-    st->sig_mem[0] = p + ulaw2lin(e);
-    st->exc_mem = e;
-  }
-  fwrite(data, 4*FRAME_SIZE, 1, file);
-  }
-}
-#endif
 
 static short float2short(float x)
 {

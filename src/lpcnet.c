@@ -54,48 +54,6 @@ static void print_vector(float *x, int N)
 }
 #endif
 
-void rc2lpc(float *lpc, const float *rc)
-{
-  float tmp[LPC_ORDER];
-  float ntmp[LPC_ORDER] = {0.0};
-  RNN_COPY(tmp, rc, LPC_ORDER);
-  for(int i = 0; i < LPC_ORDER ; i++)
-    { 
-        for(int j = 0; j <= i-1; j++)
-        {
-            ntmp[j] = tmp[j] + tmp[i]*tmp[i - j - 1];
-        }
-        for(int k = 0; k <= i-1; k++)
-        {
-            tmp[k] = ntmp[k];
-        }
-    }
-  for(int i = 0; i < LPC_ORDER ; i++)
-  {
-    lpc[i] = tmp[i];
-  }
-}
-
-void lpc_from_features(LPCNetState *lpcnet,const float *features)
-{
-  NNetState *net;
-  float in[NB_FEATURES];
-  float conv1_out[F2RC_CONV1_OUT_SIZE];
-  float conv2_out[F2RC_CONV2_OUT_SIZE];
-  float dense1_out[F2RC_DENSE3_OUT_SIZE];
-  float rc[LPC_ORDER];
-  net = &lpcnet->nnet;
-  RNN_COPY(in, features, NB_FEATURES);
-  compute_conv1d(&f2rc_conv1, conv1_out, net->f2rc_conv1_state, in);
-  if (lpcnet->frame_count < F2RC_CONV1_DELAY + 1) RNN_CLEAR(conv1_out, F2RC_CONV1_OUT_SIZE);
-  compute_conv1d(&f2rc_conv2, conv2_out, net->f2rc_conv2_state, conv1_out);
-  if (lpcnet->frame_count < (FEATURES_DELAY_F2RC + 1)) RNN_CLEAR(conv2_out, F2RC_CONV2_OUT_SIZE);
-  memmove(lpcnet->old_input_f2rc[1], lpcnet->old_input_f2rc[0], (FEATURES_DELAY_F2RC-1)*NB_FEATURES*sizeof(in[0]));
-  memcpy(lpcnet->old_input_f2rc[0], in, NB_FEATURES*sizeof(in[0]));
-  compute_dense(&f2rc_dense3, dense1_out, conv2_out);
-  compute_dense(&f2rc_dense4_outp_rc, rc, dense1_out);
-  rc2lpc(lpcnet->old_lpc[0], rc);
-}
 
 void run_frame_network(LPCNetState *lpcnet, float *condition, float *gru_a_condition, const float *features, int pitch)
 {
@@ -163,103 +121,104 @@ LPCNET_EXPORT void lpcnet_destroy(LPCNetState *lpcnet)
 }
 
 #ifdef END2END
-LPCNET_EXPORT void lpcnet_synthesize(LPCNetState *lpcnet, const float *features, short *output, int N)
+void rc2lpc(float *lpc, const float *rc)
 {
-    int i;
-    float condition[FEATURE_DENSE2_OUT_SIZE];
-    float lpc[LPC_ORDER];
-    float pdf[DUAL_FC_OUT_SIZE];
-    float gru_a_condition[3*GRU_A_STATE_SIZE];
-    int pitch;
-    float pitch_gain;
-    /* Matches the Python code -- the 0.1 avoids rounding issues. */
-    pitch = (int)floor(.1 + 50*features[36]+100);
-    pitch = IMIN(255, IMAX(33, pitch));
-    pitch_gain = lpcnet->old_gain[FEATURES_DELAY-1];
-    memmove(&lpcnet->old_gain[1], &lpcnet->old_gain[0], (FEATURES_DELAY-1)*sizeof(lpcnet->old_gain[0]));
-    lpcnet->old_gain[0] = features[PITCH_GAIN_FEATURE];
-    run_frame_network(lpcnet, condition, gru_a_condition, features, pitch);
-    lpc_from_features(lpcnet,features);
-    memcpy(lpc, lpcnet->old_lpc[0], LPC_ORDER*sizeof(lpc[0]));
-    if (lpcnet->frame_count <= FEATURES_DELAY)
-    {
-        RNN_CLEAR(output, N);
-        return;
+  float tmp[LPC_ORDER];
+  float ntmp[LPC_ORDER] = {0.0};
+  RNN_COPY(tmp, rc, LPC_ORDER);
+  for(int i = 0; i < LPC_ORDER ; i++)
+    { 
+        for(int j = 0; j <= i-1; j++)
+        {
+            ntmp[j] = tmp[j] + tmp[i]*tmp[i - j - 1];
+        }
+        for(int k = 0; k <= i-1; k++)
+        {
+            tmp[k] = ntmp[k];
+        }
     }
-    for (i=0;i<N;i++)
-    {
-        int j;
-        float pcm;
-        int exc;
-        int last_sig_ulaw;
-        int pred_ulaw;
-        float pred = 0;
-        for (j=0;j<LPC_ORDER;j++) pred -= lpcnet->last_sig[j]*lpc[j];
-        last_sig_ulaw = lin2ulaw(lpcnet->last_sig[0]);
-        pred_ulaw = lin2ulaw(pred);
-        run_sample_network(&lpcnet->nnet, pdf, condition, gru_a_condition, lpcnet->last_exc, last_sig_ulaw, pred_ulaw);
-        exc = sample_from_pdf(pdf, DUAL_FC_OUT_SIZE, MAX16(0, 1.5f*pitch_gain - .5f), PDF_FLOOR);
-        pcm = pred + ulaw2lin(exc);
-        RNN_MOVE(&lpcnet->last_sig[1], &lpcnet->last_sig[0], LPC_ORDER-1);
-        lpcnet->last_sig[0] = pcm;
-        lpcnet->last_exc = exc;
-        pcm += PREEMPH*lpcnet->deemph_mem;
-        lpcnet->deemph_mem = pcm;
-        if (pcm<-32767) pcm = -32767;
-        if (pcm>32767) pcm = 32767;
-        output[i] = (int)floor(.5 + pcm);
-    }
+  for(int i = 0; i < LPC_ORDER ; i++)
+  {
+    lpc[i] = tmp[i];
+  }
 }
-#else
-LPCNET_EXPORT void lpcnet_synthesize(LPCNetState *lpcnet, const float *features, short *output, int N)
+
+void lpc_from_features(LPCNetState *lpcnet,const float *features)
 {
-    int i;
-    float condition[FEATURE_DENSE2_OUT_SIZE];
-    float lpc[LPC_ORDER];
-    float pdf[DUAL_FC_OUT_SIZE];
-    float gru_a_condition[3*GRU_A_STATE_SIZE];
-    int pitch;
-    float pitch_gain;
-    /* Matches the Python code -- the 0.1 avoids rounding issues. */
-    pitch = (int)floor(.1 + 50*features[36]+100);
-    pitch = IMIN(255, IMAX(33, pitch));
-    pitch_gain = lpcnet->old_gain[FEATURES_DELAY-1];
-    memmove(&lpcnet->old_gain[1], &lpcnet->old_gain[0], (FEATURES_DELAY-1)*sizeof(lpcnet->old_gain[0]));
-    lpcnet->old_gain[0] = features[PITCH_GAIN_FEATURE];
-    run_frame_network(lpcnet, condition, gru_a_condition, features, pitch);
-    memcpy(lpc, lpcnet->old_lpc[FEATURES_DELAY-1], LPC_ORDER*sizeof(lpc[0]));
-    memmove(lpcnet->old_lpc[1], lpcnet->old_lpc[0], (FEATURES_DELAY-1)*LPC_ORDER*sizeof(lpc[0]));
-    lpc_from_cepstrum(lpcnet->old_lpc[0], features);
-    if (lpcnet->frame_count <= FEATURES_DELAY)
-    {
-        RNN_CLEAR(output, N);
-        return;
-    }
-    for (i=0;i<N;i++)
-    {
-        int j;
-        float pcm;
-        int exc;
-        int last_sig_ulaw;
-        int pred_ulaw;
-        float pred = 0;
-        for (j=0;j<LPC_ORDER;j++) pred -= lpcnet->last_sig[j]*lpc[j];
-        last_sig_ulaw = lin2ulaw(lpcnet->last_sig[0]);
-        pred_ulaw = lin2ulaw(pred);
-        run_sample_network(&lpcnet->nnet, pdf, condition, gru_a_condition, lpcnet->last_exc, last_sig_ulaw, pred_ulaw);
-        exc = sample_from_pdf(pdf, DUAL_FC_OUT_SIZE, MAX16(0, 1.5f*pitch_gain - .5f), PDF_FLOOR);
-        pcm = pred + ulaw2lin(exc);
-        RNN_MOVE(&lpcnet->last_sig[1], &lpcnet->last_sig[0], LPC_ORDER-1);
-        lpcnet->last_sig[0] = pcm;
-        lpcnet->last_exc = exc;
-        pcm += PREEMPH*lpcnet->deemph_mem;
-        lpcnet->deemph_mem = pcm;
-        if (pcm<-32767) pcm = -32767;
-        if (pcm>32767) pcm = 32767;
-        output[i] = (int)floor(.5 + pcm);
-    }
+  NNetState *net;
+  float in[NB_FEATURES];
+  float conv1_out[F2RC_CONV1_OUT_SIZE];
+  float conv2_out[F2RC_CONV2_OUT_SIZE];
+  float dense1_out[F2RC_DENSE3_OUT_SIZE];
+  float rc[LPC_ORDER];
+  net = &lpcnet->nnet;
+  RNN_COPY(in, features, NB_FEATURES);
+  compute_conv1d(&f2rc_conv1, conv1_out, net->f2rc_conv1_state, in);
+  if (lpcnet->frame_count < F2RC_CONV1_DELAY + 1) RNN_CLEAR(conv1_out, F2RC_CONV1_OUT_SIZE);
+  compute_conv1d(&f2rc_conv2, conv2_out, net->f2rc_conv2_state, conv1_out);
+  if (lpcnet->frame_count < (FEATURES_DELAY_F2RC + 1)) RNN_CLEAR(conv2_out, F2RC_CONV2_OUT_SIZE);
+  memmove(lpcnet->old_input_f2rc[1], lpcnet->old_input_f2rc[0], (FEATURES_DELAY_F2RC-1)*NB_FEATURES*sizeof(in[0]));
+  memcpy(lpcnet->old_input_f2rc[0], in, NB_FEATURES*sizeof(in[0]));
+  compute_dense(&f2rc_dense3, dense1_out, conv2_out);
+  compute_dense(&f2rc_dense4_outp_rc, rc, dense1_out);
+  rc2lpc(lpcnet->old_lpc[0], rc);
 }
 #endif
+
+LPCNET_EXPORT void lpcnet_synthesize(LPCNetState *lpcnet, const float *features, short *output, int N)
+{
+    int i;
+    float condition[FEATURE_DENSE2_OUT_SIZE];
+    float lpc[LPC_ORDER];
+    float pdf[DUAL_FC_OUT_SIZE];
+    float gru_a_condition[3*GRU_A_STATE_SIZE];
+    int pitch;
+    float pitch_gain;
+    /* Matches the Python code -- the 0.1 avoids rounding issues. */
+    pitch = (int)floor(.1 + 50*features[36]+100);
+    pitch = IMIN(255, IMAX(33, pitch));
+    pitch_gain = lpcnet->old_gain[FEATURES_DELAY-1];
+    memmove(&lpcnet->old_gain[1], &lpcnet->old_gain[0], (FEATURES_DELAY-1)*sizeof(lpcnet->old_gain[0]));
+    lpcnet->old_gain[0] = features[PITCH_GAIN_FEATURE];
+    run_frame_network(lpcnet, condition, gru_a_condition, features, pitch);
+    #ifdef END2END
+      lpc_from_features(lpcnet,features);
+      memcpy(lpc, lpcnet->old_lpc[0], LPC_ORDER*sizeof(lpc[0]));
+    #else
+      memcpy(lpc, lpcnet->old_lpc[FEATURES_DELAY-1], LPC_ORDER*sizeof(lpc[0]));
+      memmove(lpcnet->old_lpc[1], lpcnet->old_lpc[0], (FEATURES_DELAY-1)*LPC_ORDER*sizeof(lpc[0]));
+      lpc_from_cepstrum(lpcnet->old_lpc[0], features);
+    #endif
+
+    if (lpcnet->frame_count <= FEATURES_DELAY)
+    {
+        RNN_CLEAR(output, N);
+        return;
+    }
+    for (i=0;i<N;i++)
+    {
+        int j;
+        float pcm;
+        int exc;
+        int last_sig_ulaw;
+        int pred_ulaw;
+        float pred = 0;
+        for (j=0;j<LPC_ORDER;j++) pred -= lpcnet->last_sig[j]*lpc[j];
+        last_sig_ulaw = lin2ulaw(lpcnet->last_sig[0]);
+        pred_ulaw = lin2ulaw(pred);
+        run_sample_network(&lpcnet->nnet, pdf, condition, gru_a_condition, lpcnet->last_exc, last_sig_ulaw, pred_ulaw);
+        exc = sample_from_pdf(pdf, DUAL_FC_OUT_SIZE, MAX16(0, 1.5f*pitch_gain - .5f), PDF_FLOOR);
+        pcm = pred + ulaw2lin(exc);
+        RNN_MOVE(&lpcnet->last_sig[1], &lpcnet->last_sig[0], LPC_ORDER-1);
+        lpcnet->last_sig[0] = pcm;
+        lpcnet->last_exc = exc;
+        pcm += PREEMPH*lpcnet->deemph_mem;
+        lpcnet->deemph_mem = pcm;
+        if (pcm<-32767) pcm = -32767;
+        if (pcm>32767) pcm = 32767;
+        output[i] = (int)floor(.5 + pcm);
+    }
+}
 
 LPCNET_EXPORT int lpcnet_decoder_get_size()
 {
