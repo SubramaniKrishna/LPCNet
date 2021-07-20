@@ -21,12 +21,14 @@
 #define FORBIDDEN_INTERP 7
 
 #define FEATURES_DELAY (FEATURE_CONV1_DELAY + FEATURE_CONV2_DELAY)
+#define FEATURES_DELAY_F2RC (F2RC_CONV1_DELAY + F2RC_CONV2_DELAY)
 
 struct LPCNetState {
     NNetState nnet;
     int last_exc;
     float last_sig[LPC_ORDER];
     float old_input[FEATURES_DELAY][FEATURE_CONV2_OUT_SIZE];
+    float old_input_f2rc[FEATURES_DELAY_F2RC][F2RC_CONV2_OUT_SIZE];
     float old_lpc[FEATURES_DELAY][LPC_ORDER];
     float old_gain[FEATURES_DELAY];
     int frame_count;

@@ -40,8 +40,10 @@ import tensorflow as tf
 # config.gpu_options.per_process_gpu_memory_fraction = 0.2
 # set_session(tf.Session(config=config))
 
-model, enc, dec = lpcnet.new_lpcnet_model()
+# Flag for synthesizing e2e (differentiable lpc) model
+flag_e2e = True
 
+model, enc, dec = lpcnet.new_lpcnet_model(training = False, flag_e2e = flag_e2e)
 model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['sparse_categorical_accuracy'])
 #model.summary()
 
@@ -62,8 +64,7 @@ features[:,:,18:36] = 0
 periods = (.1 + 50*features[:,:,36:37]+100).astype('int16')
 
 
-dir_w = './model_weights/modloss_noembed/'
-model.load_weights(dir_w + 'lpcnet33e_384_120.h5')
+model.load_weights('./model_weights/mergetest/lpcnet33e_384_10.h5')
 
 order = 16
 
@@ -79,10 +80,16 @@ fout = open(out_file, 'wb')
 
 skip = order + 1
 for c in range(0, nb_frames):
-    cfeat = enc.predict([features[c:c+1, :, :nb_used_features], periods[c:c+1, :, :]])
+    if not flag_e2e:
+        cfeat = enc.predict([features[c:c+1, :, :nb_used_features], periods[c:c+1, :, :]])
+    else:
+        cfeat,lpcs = enc.predict([features[c:c+1, :, :nb_used_features], periods[c:c+1, :, :]])
     for fr in range(0, feature_chunk_size):
         f = c*feature_chunk_size + fr
-        a = features[c, fr, nb_features-order:]
+        if not flag_e2e:
+            a = features[c, fr, nb_features-order:]
+        else:
+            a = lpcs[c,fr]
         for i in range(skip, frame_size):
             pred = -sum(a*pcm[f*frame_size + i - 1:f*frame_size + i - order-1:-1])
             fexc[0, 0, 1] = lin2ulaw(pred)

@@ -6,6 +6,7 @@ Tensorflow/Keras helper functions to do the following:
 """
 from tensorflow.keras.layers import Lambda, Multiply, Layer, Concatenate
 from tensorflow.keras import backend as K
+import tensorflow as tf
 
 # \mu law <-> Linear conversion functions
 scale = 255.0/32768.0
@@ -18,6 +19,7 @@ def tf_l2u(x):
     return u
 
 def tf_u2l(u):
+    u = tf.cast(u,"float32")
     u = u - 128.0
     s = K.sign(u)
     u = K.abs(u)
