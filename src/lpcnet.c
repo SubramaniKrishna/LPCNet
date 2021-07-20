@@ -162,8 +162,7 @@ LPCNET_EXPORT void lpcnet_destroy(LPCNetState *lpcnet)
     free(lpcnet);
 }
 
-// Make this '1' if you are not using the end2end LPCNet
-#if 0
+#ifdef END2END
 LPCNET_EXPORT void lpcnet_synthesize(LPCNetState *lpcnet, const float *features, short *output, int N)
 {
     int i;
@@ -180,9 +179,8 @@ LPCNET_EXPORT void lpcnet_synthesize(LPCNetState *lpcnet, const float *features,
     memmove(&lpcnet->old_gain[1], &lpcnet->old_gain[0], (FEATURES_DELAY-1)*sizeof(lpcnet->old_gain[0]));
     lpcnet->old_gain[0] = features[PITCH_GAIN_FEATURE];
     run_frame_network(lpcnet, condition, gru_a_condition, features, pitch);
-    memcpy(lpc, lpcnet->old_lpc[FEATURES_DELAY-1], LPC_ORDER*sizeof(lpc[0]));
-    memmove(lpcnet->old_lpc[1], lpcnet->old_lpc[0], (FEATURES_DELAY-1)*LPC_ORDER*sizeof(lpc[0]));
-    lpc_from_cepstrum(lpcnet->old_lpc[0], features);
+    lpc_from_features(lpcnet,features);
+    memcpy(lpc, lpcnet->old_lpc[0], LPC_ORDER*sizeof(lpc[0]));
     if (lpcnet->frame_count <= FEATURES_DELAY)
     {
         RNN_CLEAR(output, N);
@@ -212,9 +210,7 @@ LPCNET_EXPORT void lpcnet_synthesize(LPCNetState *lpcnet, const float *features,
         output[i] = (int)floor(.5 + pcm);
     }
 }
-#endif
-
-#if 1
+#else
 LPCNET_EXPORT void lpcnet_synthesize(LPCNetState *lpcnet, const float *features, short *output, int N)
 {
     int i;
@@ -231,8 +227,9 @@ LPCNET_EXPORT void lpcnet_synthesize(LPCNetState *lpcnet, const float *features,
     memmove(&lpcnet->old_gain[1], &lpcnet->old_gain[0], (FEATURES_DELAY-1)*sizeof(lpcnet->old_gain[0]));
     lpcnet->old_gain[0] = features[PITCH_GAIN_FEATURE];
     run_frame_network(lpcnet, condition, gru_a_condition, features, pitch);
-    lpc_from_features(lpcnet,features);
-    memcpy(lpc, lpcnet->old_lpc[0], LPC_ORDER*sizeof(lpc[0]));
+    memcpy(lpc, lpcnet->old_lpc[FEATURES_DELAY-1], LPC_ORDER*sizeof(lpc[0]));
+    memmove(lpcnet->old_lpc[1], lpcnet->old_lpc[0], (FEATURES_DELAY-1)*LPC_ORDER*sizeof(lpc[0]));
+    lpc_from_cepstrum(lpcnet->old_lpc[0], features);
     if (lpcnet->frame_count <= FEATURES_DELAY)
     {
         RNN_CLEAR(output, N);
