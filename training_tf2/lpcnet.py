@@ -143,7 +143,7 @@ class WeightClip(Constraint):
 
 constraint = WeightClip(0.992)
 
-def new_lpcnet_model(rnn_units1=384, rnn_units2=16, nb_used_features = 38, training=False, adaptation=False, quantize=False, flag_e2e = False):
+def new_lpcnet_model(rnn_units1=384, rnn_units2=16, nb_used_features = 20, training=False, adaptation=False, quantize=False, flag_e2e = False):
     pcm = Input(shape=(None, 3))
     feat = Input(shape=(None, nb_used_features))
     pitch = Input(shape=(None, 1))
@@ -154,6 +154,15 @@ def new_lpcnet_model(rnn_units1=384, rnn_units2=16, nb_used_features = 38, train
     padding = 'valid' if training else 'same'
     fconv1 = Conv1D(128, 3, padding=padding, activation='tanh', name='feature_conv1')
     fconv2 = Conv1D(128, 3, padding=padding, activation='tanh', name='feature_conv2')
+    pembed = Embedding(256, 64, name='embed_pitch')
+    cat_feat = Concatenate()([feat, Reshape((-1, 64))(pembed(pitch))])
+
+    cfeat = fconv2(fconv1(cat_feat))
+
+    fdense1 = Dense(128, activation='tanh', name='feature_dense1')
+    fdense2 = Dense(128, activation='tanh', name='feature_dense2')
+
+    cfeat = fdense2(fdense1(cfeat))
 
     if not flag_e2e:
         embed = Embedding(256, embed_size, embeddings_initializer=PCMInit(), name='embed_sig')
@@ -161,8 +170,7 @@ def new_lpcnet_model(rnn_units1=384, rnn_units2=16, nb_used_features = 38, train
     else:
         Input_extractor = Lambda(lambda x: K.expand_dims(x[0][:,:,x[1]],axis = -1))
         error_calc = Lambda(lambda x: tf_l2u(tf_u2l(x[0]) - tf.roll(tf_u2l(x[1]),1,axis = 1)))
-        feat2lpc = difflpc.difflpc(training = training)
-        lpcoeffs = feat2lpc(feat)
+        lpcoeffs = diff_rc2lpc(name = "rc2lpc")(cfeat)
         tensor_preds = diff_pred(name = "lpc2preds")([Input_extractor([pcm,0]),lpcoeffs])
         past_errors = error_calc([Input_extractor([pcm,0]),tensor_preds])
         embed = diff_Embed(name='embed_sig',initializer = PCMInit())
@@ -171,15 +179,6 @@ def new_lpcnet_model(rnn_units1=384, rnn_units2=16, nb_used_features = 38, train
         cpcm_decoder = Concatenate()([Input_extractor([pcm,0]),Input_extractor([pcm,1]),Input_extractor([pcm,2])])
         cpcm_decoder = Reshape((-1, embed_size*3))(embed(cpcm_decoder))
 
-    pembed = Embedding(256, 64, name='embed_pitch')
-    cat_feat = Concatenate()([feat, Reshape((-1, 64))(pembed(pitch))])
-    
-    cfeat = fconv2(fconv1(cat_feat))
-
-    fdense1 = Dense(128, activation='tanh', name='feature_dense1')
-    fdense2 = Dense(128, activation='tanh', name='feature_dense2')
-
-    cfeat = fdense2(fdense1(cfeat))
     
     rep = Lambda(lambda x: K.repeat_elements(x, frame_size, 1))
 
@@ -197,11 +196,11 @@ def new_lpcnet_model(rnn_units1=384, rnn_units2=16, nb_used_features = 38, train
                kernel_constraint=constraint, kernel_regularizer=quant)
 
     rnn_in = Concatenate()([cpcm, rep(cfeat)])
-    md = MDense(pcm_levels, activation='softmax', name='dual_fc')
+    md = MDense(pcm_levels, activation='sigmoid', name='dual_fc')
     gru_out1, _ = rnn(rnn_in)
     gru_out2, _ = rnn2(Concatenate()([gru_out1, rep(cfeat)]))
-    ulaw_prob = md(gru_out2)
-    
+    ulaw_prob = Lambda(tree_to_pdf_train)(md(gru_out2))
+
     if adaptation:
         rnn.trainable=False
         rnn2.trainable=False
@@ -211,7 +210,8 @@ def new_lpcnet_model(rnn_units1=384, rnn_units2=16, nb_used_features = 38, train
     if not flag_e2e:
         model = Model([pcm, feat, pitch], ulaw_prob)
     else:
-        m_out = Concatenate()([tensor_preds,ulaw_prob])
+        # m_out = Concatenate()([tensor_preds,ulaw_prob])
+        m_out = Concatenate()([tensor_preds,rep(cfeat[:,:,16:17]),ulaw_prob])
         model = Model([pcm, feat, pitch], m_out)
     model.rnn_units1 = rnn_units1
     model.rnn_units2 = rnn_units2
@@ -226,7 +226,7 @@ def new_lpcnet_model(rnn_units1=384, rnn_units2=16, nb_used_features = 38, train
         dec_rnn_in = Concatenate()([cpcm_decoder, dec_feat])
     dec_gru_out1, state1 = rnn(dec_rnn_in, initial_state=dec_state1)
     dec_gru_out2, state2 = rnn2(Concatenate()([dec_gru_out1, dec_feat]), initial_state=dec_state2)
-    dec_ulaw_prob = md(dec_gru_out2)
+    dec_ulaw_prob = Lambda(tree_to_pdf_infer)(md(dec_gru_out2))
 
     decoder = Model([pcm, dec_feat, dec_state1, dec_state2], [dec_ulaw_prob, state1, state2])
     return model, encoder, decoder

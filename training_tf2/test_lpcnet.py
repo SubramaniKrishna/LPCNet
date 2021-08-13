@@ -28,29 +28,21 @@
 import lpcnet
 import sys
 import numpy as np
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.callbacks import ModelCheckpoint
 from ulaw import ulaw2lin, lin2ulaw
-import tensorflow.keras.backend as K
 import h5py
-
-import tensorflow as tf
-# from keras.backend.tensorflow_backend import set_session
-# config = tf.ConfigProto()
-# config.gpu_options.per_process_gpu_memory_fraction = 0.2
-# set_session(tf.Session(config=config))
 
 # Flag for synthesizing e2e (differentiable lpc) model
 flag_e2e = True
 
 model, enc, dec = lpcnet.new_lpcnet_model(training = False, flag_e2e = flag_e2e)
+
 model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['sparse_categorical_accuracy'])
 #model.summary()
 
 feature_file = sys.argv[1]
 out_file = sys.argv[2]
 frame_size = model.frame_size
-nb_features = 55
+nb_features = 36
 nb_used_features = model.nb_used_features
 
 features = np.fromfile(feature_file, dtype='float32')
@@ -60,11 +52,12 @@ feature_chunk_size = features.shape[0]
 pcm_chunk_size = frame_size*feature_chunk_size
 
 features = np.reshape(features, (nb_frames, feature_chunk_size, nb_features))
-features[:,:,18:36] = 0
-periods = (.1 + 50*features[:,:,36:37]+100).astype('int16')
+periods = (.1 + 50*features[:,:,18:19]+100).astype('int16')
 
 
-model.load_weights('./model_weights/mergetest/lpcnet33e_384_10.h5')
+
+# model.load_weights('lpcnet38Sn_384_02.h5');
+model.load_weights('./sld/sld_384_32.h5')
 
 order = 16
 
@@ -84,26 +77,30 @@ for c in range(0, nb_frames):
         cfeat = enc.predict([features[c:c+1, :, :nb_used_features], periods[c:c+1, :, :]])
     else:
         cfeat,lpcs = enc.predict([features[c:c+1, :, :nb_used_features], periods[c:c+1, :, :]])
+        G = cfeat[:, :, 16]
     for fr in range(0, feature_chunk_size):
         f = c*feature_chunk_size + fr
         if not flag_e2e:
             a = features[c, fr, nb_features-order:]
         else:
             a = lpcs[c,fr]
+            Gm = G[c,fr]
+            Gm = np.sqrt((1 + Gm)/(1 - Gm))
         for i in range(skip, frame_size):
             pred = -sum(a*pcm[f*frame_size + i - 1:f*frame_size + i - order-1:-1])
             fexc[0, 0, 1] = lin2ulaw(pred)
 
             p, state1, state2 = dec.predict([fexc, cfeat[:, fr:fr+1, :], state1, state2])
             #Lower the temperature for voiced frames to reduce noisiness
-            p *= np.power(p, np.maximum(0, 1.5*features[c, fr, 37] - .5))
+            p *= np.power(p, np.maximum(0, 1.5*features[c, fr, 19] - .5))
             p = p/(1e-18 + np.sum(p))
             #Cut off the tail of the remaining distribution
             p = np.maximum(p-0.002, 0).astype('float64')
             p = p/(1e-8 + np.sum(p))
 
             fexc[0, 0, 2] = np.argmax(np.random.multinomial(1, p[0,0,:], 1))
-            pcm[f*frame_size + i] = pred + ulaw2lin(fexc[0, 0, 2])
+            # pcm[f*frame_size + i] = pred + ulaw2lin(fexc[0, 0, 2])
+            pcm[f*frame_size + i] = pred + (fexc[0, 0, 2] - 128)*Gm
             fexc[0, 0, 0] = lin2ulaw(pcm[f*frame_size + i])
             mem = coef*mem + pcm[f*frame_size + i]
             #print(mem)

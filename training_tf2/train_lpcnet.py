@@ -42,7 +42,7 @@ from lossfuncs import *
 #  except RuntimeError as e:
 #    print(e)
 
-nb_epochs = 40
+nb_epochs = 20
 
 # Try reducing batch_size if you run out of memory on your GPU
 batch_size = 128
@@ -68,7 +68,8 @@ with strategy.scope():
     if not flag_e2e:
         model.compile(optimizer=opt, loss='sparse_categorical_crossentropy', metrics=['sparse_categorical_accuracy'])
     else:
-        model.compile(optimizer=opt, loss = interp_mulaw(gamma = 2),metrics=[metric_cel,metric_icel,metric_exc_sd,metric_oginterploss])
+         model.compile(optimizer=opt, loss = interp_sld(gamma = 1, smallG = 1, largeG = 1, lpc_reg = 1.0e-5),metrics=[metric_exc_sd, metric_reg_largeG, metric_reg_smallG, metric_probcompensation, metric_sld_icel, metric_mulaw_icel, metric_G, metric_lpcreg])
+        # model.compile(optimizer=opt, loss = interp_mulaw(gamma = 2),metrics=[metric_cel,metric_icel,metric_exc_sd,metric_oginterploss])
     model.summary()
 
 feature_file = sys.argv[1]
@@ -119,8 +120,7 @@ del pred
 del in_exc
 
 # dump models to disk as we go
-dir_w = './model_weights/mergetest/'
-checkpoint = ModelCheckpoint(dir_w + 'lpcnet33e_384_{epoch:02d}.h5')
+checkpoint = ModelCheckpoint('./model_weights/sharedweights/lpcnet33e_384_{epoch:02d}.h5')
 
 if adaptation:
     #Adapting from an existing model
@@ -130,6 +130,6 @@ else:
     #Training from scratch
     sparsify = lpcnet.Sparsify(2000, 40000, 400, (0.05, 0.05, 0.2))
 
-model.save_weights(dir_w + 'lpcnet33e_384_00.h5')
-csv_logger = CSVLogger(dir_w + 'training_vals.log')
+model.save_weights('./model_weights/sharedweights/lpcnet33e_384_00.h5')
+csv_logger = CSVLogger('./model_weights/sharedweights/training_vals.log')
 model.fit([in_data, features, periods], out_exc, batch_size=batch_size, epochs=nb_epochs, validation_split=0.0, callbacks=[checkpoint, sparsify, csv_logger])
